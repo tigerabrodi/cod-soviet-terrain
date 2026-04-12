@@ -1,5 +1,24 @@
 @import 'tailwindcss';
 
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: #090d12;
+    color: #edf2f7;
+    font-family: var(--font-body);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+}
+
 @theme {
   /* ==========================================================================
    * CUSTOMIZE: Replace these colors with your project's palette.

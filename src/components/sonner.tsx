@@ -10,7 +10,13 @@ function LoadingSpinner() {
       viewBox="0 0 18 18"
       width="18"
     >
-      <circle cx="9" cy="9" r="7" stroke="var(--color-border)" strokeWidth="2" />
+      <circle
+        cx="9"
+        cy="9"
+        r="7"
+        stroke="var(--color-border)"
+        strokeWidth="2"
+      />
       <path
         d="M9 2a7 7 0 0 1 7 7"
         stroke="var(--color-accent)"
