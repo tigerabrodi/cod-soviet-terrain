@@ -1,15 +1,16 @@
+import { buildTerrainChunk } from '@/lib/terrain/terrain-chunk'
+import { createTerrainMaterial } from '@/lib/terrain/terrain-material'
+import { loadTerrainTextureSet } from '@/lib/terrain/terrain-textures'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js'
 import {
   ACESFilmicToneMapping,
   PCFSoftShadowMap,
   SRGBColorSpace,
   WebGPURenderer,
 } from 'three/webgpu'
-import { buildTerrainChunk } from '@/lib/terrain/terrain-chunk'
-import { createTerrainMaterial } from '@/lib/terrain/terrain-material'
-import { loadTerrainTextureSet } from '@/lib/terrain/terrain-textures'
 
 type TerrainRendererProps = NonNullable<
   ConstructorParameters<typeof WebGPURenderer>[0]
@@ -19,17 +20,21 @@ type TerrainRendererProps = NonNullable<
 }
 
 export interface TerrainSceneProps {
+  cameraMode: CameraMode
   onBackendChange?: (backend: string) => void
   onReadyChange?: (ready: boolean) => void
 }
 
+export type CameraMode = 'fly' | 'orbit'
+
 export function TerrainScene({
+  cameraMode,
   onBackendChange,
   onReadyChange,
 }: TerrainSceneProps) {
   return (
     <Canvas
-      camera={{ far: 500, fov: 42, near: 0.1, position: [86, 64, 104] }}
+      camera={{ far: 500, fov: 42, near: 0.1, position: [54, 32, 56] }}
       className="absolute inset-0 h-full w-full"
       dpr={[1, 2]}
       gl={createTerrainRenderer}
@@ -38,6 +43,7 @@ export function TerrainScene({
       <color attach="background" args={['#0b1015']} />
       <fog attach="fog" args={['#95a3af', 125, 285]} />
       <TerrainWorld
+        cameraMode={cameraMode}
         onBackendChange={onBackendChange}
         onReadyChange={onReadyChange}
       />
@@ -62,7 +68,11 @@ async function createTerrainRenderer(defaultProps: unknown) {
   return renderer
 }
 
-function TerrainWorld({ onBackendChange, onReadyChange }: TerrainSceneProps) {
+function TerrainWorld({
+  cameraMode,
+  onBackendChange,
+  onReadyChange,
+}: TerrainSceneProps) {
   const gl = useThree((state) => state.gl)
 
   const terrainChunk = useMemo(() => buildTerrainChunk(), [])
@@ -153,7 +163,7 @@ function TerrainWorld({ onBackendChange, onReadyChange }: TerrainSceneProps) {
         <circleGeometry args={[160, 64]} />
         <meshStandardMaterial color="#14191f" roughness={1} />
       </mesh>
-      <OrbitCamera />
+      {cameraMode === 'fly' ? <FlyCamera /> : <OrbitCamera />}
       {isMaterialReady ? null : (
         <mesh position={[0, 26, -46]}>
           <planeGeometry args={[26, 6]} />
@@ -170,13 +180,15 @@ function OrbitCamera() {
 
   const controls = useMemo(() => {
     const nextControls = new OrbitControls(camera, gl.domElement)
+    camera.position.set(54, 32, 56)
+    camera.lookAt(0, 10, 0)
     nextControls.enableDamping = true
     nextControls.dampingFactor = 0.06
-    nextControls.maxDistance = 220
+    nextControls.maxDistance = 180
     nextControls.maxPolarAngle = Math.PI * 0.46
-    nextControls.minDistance = 36
+    nextControls.minDistance = 22
     nextControls.minPolarAngle = Math.PI * 0.12
-    nextControls.target.set(0, 12, 0)
+    nextControls.target.set(0, 10, 0)
 
     return nextControls
   }, [camera, gl.domElement])
@@ -189,6 +201,83 @@ function OrbitCamera() {
 
   useFrame(() => {
     controls.update()
+  })
+
+  return null
+}
+
+function FlyCamera() {
+  const camera = useThree((state) => state.camera)
+  const gl = useThree((state) => state.gl)
+  const keyState = useRef<Record<string, boolean>>({})
+
+  const controls = useMemo(() => {
+    camera.position.set(10, 9, 20)
+    camera.lookAt(0, 9, 0)
+
+    const nextControls = new PointerLockControls(camera, gl.domElement)
+    nextControls.pointerSpeed = 0.75
+    nextControls.minPolarAngle = Math.PI * 0.08
+    nextControls.maxPolarAngle = Math.PI * 0.92
+
+    return nextControls
+  }, [camera, gl.domElement])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      keyState.current[event.code] = true
+    }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      keyState.current[event.code] = false
+    }
+
+    const handleCanvasClick = () => {
+      if (!controls.isLocked) {
+        controls.lock()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    gl.domElement.addEventListener('click', handleCanvasClick)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+      gl.domElement.removeEventListener('click', handleCanvasClick)
+      if (controls.isLocked) {
+        controls.unlock()
+      }
+      controls.dispose()
+    }
+  }, [controls, gl.domElement])
+
+  useFrame((_, delta) => {
+    const isBoosting = keyState.current.ShiftLeft || keyState.current.ShiftRight
+    const moveSpeed = (isBoosting ? 34 : 16) * delta
+    const verticalSpeed = (isBoosting ? 22 : 10) * delta
+
+    if (keyState.current.KeyW) {
+      controls.moveForward(moveSpeed)
+    }
+    if (keyState.current.KeyS) {
+      controls.moveForward(-moveSpeed)
+    }
+    if (keyState.current.KeyA) {
+      controls.moveRight(-moveSpeed)
+    }
+    if (keyState.current.KeyD) {
+      controls.moveRight(moveSpeed)
+    }
+    if (keyState.current.KeyE) {
+      camera.position.setY(camera.position.y + verticalSpeed)
+    }
+    if (keyState.current.KeyQ) {
+      camera.position.setY(camera.position.y - verticalSpeed)
+    }
+
+    camera.position.setY(Math.max(camera.position.y, 3))
   })
 
   return null
