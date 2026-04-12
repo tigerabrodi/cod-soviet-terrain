@@ -22,6 +22,8 @@ export interface TerrainChunkData {
   stats: TerrainChunkStats
 }
 
+export type TerrainSplatWeights = readonly [number, number, number, number]
+
 const broadNoise = new NoiseGenerator({
   exponentiation: 1.85,
   height: 28,
@@ -127,7 +129,7 @@ export function buildTerrainChunk(
   }
 }
 
-function sampleTerrainHeight(x: number, z: number) {
+export function sampleTerrainHeight(x: number, z: number) {
   const broad = broadNoise.get(x, 17.3, z) - 10.5
   const detail = (detailNoise.get(x * 1.15, 61.4, z * 1.15) - 4.8) * 0.85
   const ridge = (ridgeNoise.get(x * 1.35, 109.7, z * 1.35) - 4.1) * 0.45
@@ -138,7 +140,10 @@ function sampleTerrainHeight(x: number, z: number) {
   return 12 + broad + detail + ridge - craterDepth
 }
 
-function computeSplatWeights(height01: number, flatness: number) {
+export function computeSplatWeights(
+  height01: number,
+  flatness: number
+): TerrainSplatWeights {
   const steepness = 1 - flatness
   const rockWeight = smoothstep(0.18, 0.42, steepness)
   const flatShare = 1 - rockWeight
@@ -158,7 +163,9 @@ function computeSplatWeights(height01: number, flatness: number) {
   ])
 }
 
-function normalizeWeights(weights: [number, number, number, number]) {
+function normalizeWeights(
+  weights: [number, number, number, number]
+): TerrainSplatWeights {
   const total = weights[0] + weights[1] + weights[2] + weights[3]
 
   if (total <= Number.EPSILON) {
