@@ -1,0 +1,100 @@
+@import 'tailwindcss';
+
+@theme {
+  /* ==========================================================================
+   * CUSTOMIZE: Replace these colors with your project's palette.
+   * Current values are a warm light theme with a terracotta accent.
+   * ========================================================================== */
+
+  /* Colors */
+  --color-bg: #faf7f2;
+  --color-surface: #ffffff;
+  --color-border: #e8e2da;
+  --color-border-light: rgba(45, 42, 38, 0.06);
+
+  --color-text-primary: #2d2a26;
+  --color-text-secondary: #8a8279;
+  --color-text-muted: #b8b0a4;
+  --color-text-on-dark: #faf7f2;
+
+  --color-accent: #c45d3e;
+  --color-accent-hover: #b5522f;
+
+  --color-overlay: rgba(45, 42, 38, 0.5);
+  --color-subtle-bg: rgba(45, 42, 38, 0.05);
+  --color-subtle-bg-hover: rgba(45, 42, 38, 0.08);
+
+  /* ==========================================================================
+   * CUSTOMIZE: Replace these fonts with your own.
+   * Install via fontsource: bun add @fontsource-variable/<name>
+   * Then import in main.tsx and update declarations.d.ts.
+   * ========================================================================== */
+
+  /* Typography */
+  --font-display: 'Fraunces', serif;
+  --font-body: 'DM Sans', sans-serif;
+
+  --text-display: 64px;
+  --text-heading: 24px;
+  --text-body: 15px;
+  --text-small: 14px;
+  --text-caption: 12px;
+
+  /* Spacing */
+  --spacing-section: 64px;
+  --spacing-group: 24px;
+  --spacing-element: 12px;
+  --spacing-tight: 8px;
+  --spacing-micro: 4px;
+
+  /* Radii */
+  --radius-xl: 20px;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  --radius-round: 100px;
+
+  /* Shadows */
+  --shadow-dialog:
+    0 16px 48px rgba(45, 42, 38, 0.16), 0 0 0 1px rgba(45, 42, 38, 0.06);
+  --shadow-dropdown:
+    0 8px 32px rgba(45, 42, 38, 0.12), 0 0 0 1px rgba(45, 42, 38, 0.06);
+  --shadow-card: 0 4px 20px rgba(45, 42, 38, 0.12);
+}
+
+/* ==========================================================================
+ * Sonner toast overrides
+ * CUSTOMIZE: Adjust animation speed, loading spinner fix, and content layout.
+ * ========================================================================== */
+
+/* Content area fills remaining space so buttons push right */
+[data-sonner-toaster] [data-sonner-toast] [data-content] {
+  flex: 1;
+  min-width: 0;
+}
+
+/* CUSTOMIZE: Animation speed (default Sonner is 400ms) */
+[data-sonner-toaster] [data-sonner-toast] {
+  --toast-animation-duration: 200ms;
+  transition:
+    transform 200ms ease,
+    opacity 200ms ease,
+    height 200ms ease,
+    box-shadow 200ms ease !important;
+}
+
+/* Loading toast: left rail + icon color */
+[data-sonner-toaster] [data-sonner-toast][data-type='loading'] {
+  border-left: 3px solid var(--color-accent);
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type='loading'] [data-icon] {
+  color: var(--color-accent);
+}
+
+/* Fix Sonner's loading spinner positioning (absolute → static) */
+[data-sonner-toaster] [data-sonner-toast][data-type='loading'] .sonner-loader {
+  position: static;
+  transform: none;
+}
