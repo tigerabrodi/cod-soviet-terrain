@@ -40,7 +40,7 @@ function HomePage() {
               COD Soviet Terrain
             </p>
             <p className="font-display mt-2 text-[clamp(1.2rem,2.2vw,2rem)] leading-none text-[#f4f7fb]">
-              Terrain slice one.
+              Terrain streaming.
             </p>
           </motion.div>
 

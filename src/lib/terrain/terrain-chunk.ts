@@ -5,6 +5,8 @@ export const DEFAULT_TERRAIN_CHUNK_SIZE = 180
 export const DEFAULT_TERRAIN_CHUNK_RESOLUTION = 64
 
 export interface TerrainChunkBuildOptions {
+  offsetX?: number
+  offsetZ?: number
   resolution?: number
   size?: number
 }
@@ -67,6 +69,8 @@ const craterNoise = new NoiseGenerator({
 export function buildTerrainChunk(
   options: TerrainChunkBuildOptions = {}
 ): TerrainChunkData {
+  const offsetX = options.offsetX ?? 0
+  const offsetZ = options.offsetZ ?? 0
   const size = options.size ?? DEFAULT_TERRAIN_CHUNK_SIZE
   const resolution = options.resolution ?? DEFAULT_TERRAIN_CHUNK_RESOLUTION
 
@@ -82,7 +86,7 @@ export function buildTerrainChunk(
   for (let index = 0; index < positions.count; index += 1) {
     const x = positions.getX(index)
     const z = positions.getZ(index)
-    const height = sampleTerrainHeight(x, z)
+    const height = sampleTerrainHeight(x + offsetX, z + offsetZ)
 
     positions.setY(index, height)
     minHeight = Math.min(minHeight, height)

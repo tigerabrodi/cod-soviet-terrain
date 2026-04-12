@@ -66,7 +66,8 @@ describe('buildTerrainChunk', () => {
         let total = 0
 
         for (let channel = 0; channel < splatWeights.itemSize; channel += 1) {
-          const weight = splatWeights.array[index * splatWeights.itemSize + channel]
+          const weight =
+            splatWeights.array[index * splatWeights.itemSize + channel]
           total += weight
           expect(weight).toBeGreaterThanOrEqual(0)
           expect(weight).toBeLessThanOrEqual(1)
@@ -76,6 +77,57 @@ describe('buildTerrainChunk', () => {
       }
     } finally {
       geometry.dispose()
+    }
+  })
+
+  it('matches border heights for neighboring chunk offsets', () => {
+    const leftChunk = buildTerrainChunk({
+      offsetX: 0,
+      offsetZ: 0,
+      resolution: 4,
+      size: 32,
+    })
+    const rightChunk = buildTerrainChunk({
+      offsetX: 32,
+      offsetZ: 0,
+      resolution: 4,
+      size: 32,
+    })
+
+    try {
+      const leftPositions = leftChunk.geometry.getAttribute('position')
+      const rightPositions = rightChunk.geometry.getAttribute('position')
+      const leftEdgeHeights = new Map<number, number>()
+      const rightEdgeHeights = new Map<number, number>()
+
+      for (let index = 0; index < leftPositions.count; index += 1) {
+        if (Math.abs(leftPositions.getX(index) - 16) <= 0.000001) {
+          leftEdgeHeights.set(
+            leftPositions.getZ(index),
+            leftPositions.getY(index)
+          )
+        }
+      }
+
+      for (let index = 0; index < rightPositions.count; index += 1) {
+        if (Math.abs(rightPositions.getX(index) + 16) <= 0.000001) {
+          rightEdgeHeights.set(
+            rightPositions.getZ(index),
+            rightPositions.getY(index)
+          )
+        }
+      }
+
+      expect(leftEdgeHeights.size).toBe(5)
+      expect(rightEdgeHeights.size).toBe(5)
+      expect([...leftEdgeHeights.keys()]).toEqual([...rightEdgeHeights.keys()])
+
+      for (const [z, leftHeight] of leftEdgeHeights) {
+        expect(leftHeight).toBeCloseTo(rightEdgeHeights.get(z) ?? NaN, 6)
+      }
+    } finally {
+      leftChunk.geometry.dispose()
+      rightChunk.geometry.dispose()
     }
   })
 })

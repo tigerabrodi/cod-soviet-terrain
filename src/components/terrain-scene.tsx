@@ -1,5 +1,15 @@
-import { buildTerrainChunk } from '@/lib/terrain/terrain-chunk'
+import {
+  buildTerrainChunk,
+  DEFAULT_TERRAIN_CHUNK_RESOLUTION,
+  DEFAULT_TERRAIN_CHUNK_SIZE,
+} from '@/lib/terrain/terrain-chunk'
 import { createTerrainMaterial } from '@/lib/terrain/terrain-material'
+import {
+  getChunkAnchor,
+  selectChunkWindow,
+  shouldRefreshChunkWindow,
+  type TerrainChunkAnchor,
+} from '@/lib/terrain/terrain-streaming'
 import { loadTerrainTextureSet } from '@/lib/terrain/terrain-textures'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -27,6 +37,8 @@ export interface TerrainSceneProps {
 
 export type CameraMode = 'fly' | 'orbit'
 
+const TERRAIN_STREAM_RADIUS = 1
+
 export function TerrainScene({
   cameraMode,
   onBackendChange,
@@ -34,14 +46,14 @@ export function TerrainScene({
 }: TerrainSceneProps) {
   return (
     <Canvas
-      camera={{ far: 500, fov: 42, near: 0.1, position: [54, 32, 56] }}
+      camera={{ far: 900, fov: 42, near: 0.1, position: [96, 48, 96] }}
       className="absolute inset-0 h-full w-full"
       dpr={[1, 2]}
       gl={createTerrainRenderer}
       shadows
     >
       <color attach="background" args={['#0b1015']} />
-      <fog attach="fog" args={['#95a3af', 125, 285]} />
+      <fog attach="fog" args={['#95a3af', 150, 520]} />
       <TerrainWorld
         cameraMode={cameraMode}
         onBackendChange={onBackendChange}
@@ -75,11 +87,30 @@ function TerrainWorld({
 }: TerrainSceneProps) {
   const gl = useThree((state) => state.gl)
 
-  const terrainChunk = useMemo(() => buildTerrainChunk(), [])
   const [isMaterialReady, setIsMaterialReady] = useState(false)
+  const [chunkAnchor, setChunkAnchor] = useState<TerrainChunkAnchor>(() =>
+    getChunkAnchor(0, 0, DEFAULT_TERRAIN_CHUNK_SIZE)
+  )
   const [terrainMaterial, setTerrainMaterial] = useState<ReturnType<
     typeof createTerrainMaterial
   > | null>(null)
+  const terrainChunks = useMemo(
+    () =>
+      selectChunkWindow(
+        chunkAnchor,
+        DEFAULT_TERRAIN_CHUNK_SIZE,
+        TERRAIN_STREAM_RADIUS
+      ).map((terrainChunk) => ({
+        ...terrainChunk,
+        data: buildTerrainChunk({
+          offsetX: terrainChunk.worldX,
+          offsetZ: terrainChunk.worldZ,
+          resolution: DEFAULT_TERRAIN_CHUNK_RESOLUTION,
+          size: DEFAULT_TERRAIN_CHUNK_SIZE,
+        }),
+      })),
+    [chunkAnchor]
+  )
 
   useEffect(() => {
     const backend =
@@ -118,9 +149,11 @@ function TerrainWorld({
 
   useEffect(() => {
     return () => {
-      terrainChunk.geometry.dispose()
+      for (const terrainChunk of terrainChunks) {
+        terrainChunk.data.geometry.dispose()
+      }
     }
-  }, [terrainChunk.geometry])
+  }, [terrainChunks])
 
   useEffect(() => {
     return () => {
@@ -144,25 +177,45 @@ function TerrainWorld({
         shadow-mapSize-height={2048}
         shadow-mapSize-width={2048}
       />
-      <mesh geometry={terrainChunk.geometry} receiveShadow>
-        {terrainMaterial ? (
-          <primitive attach="material" object={terrainMaterial} />
-        ) : (
-          <meshStandardMaterial
-            color="#616971"
-            metalness={0.02}
-            roughness={0.95}
-          />
-        )}
-      </mesh>
+      {terrainChunks.map((terrainChunk) => (
+        <mesh
+          geometry={terrainChunk.data.geometry}
+          key={terrainChunk.key}
+          position={[terrainChunk.worldX, 0, terrainChunk.worldZ]}
+          receiveShadow
+        >
+          {terrainMaterial ? (
+            <primitive attach="material" object={terrainMaterial} />
+          ) : (
+            <meshStandardMaterial
+              color="#616971"
+              metalness={0.02}
+              roughness={0.95}
+            />
+          )}
+        </mesh>
+      ))}
       <mesh
-        position={[0, -0.35, 0]}
+        position={[
+          chunkAnchor.gridX * DEFAULT_TERRAIN_CHUNK_SIZE,
+          -0.35,
+          chunkAnchor.gridZ * DEFAULT_TERRAIN_CHUNK_SIZE,
+        ]}
         receiveShadow
         rotation={[-Math.PI / 2, 0, 0]}
       >
-        <circleGeometry args={[160, 64]} />
+        <circleGeometry
+          args={[
+            DEFAULT_TERRAIN_CHUNK_SIZE * (TERRAIN_STREAM_RADIUS + 1.85),
+            64,
+          ]}
+        />
         <meshStandardMaterial color="#14191f" roughness={1} />
       </mesh>
+      <ChunkStreamTracker
+        chunkAnchor={chunkAnchor}
+        onChunkAnchorChange={setChunkAnchor}
+      />
       {cameraMode === 'fly' ? <FlyCamera /> : <OrbitCamera />}
       {isMaterialReady ? null : (
         <mesh position={[0, 26, -46]}>
@@ -174,17 +227,48 @@ function TerrainWorld({
   )
 }
 
+function ChunkStreamTracker({
+  chunkAnchor,
+  onChunkAnchorChange,
+}: {
+  chunkAnchor: TerrainChunkAnchor
+  onChunkAnchorChange: (anchor: TerrainChunkAnchor) => void
+}) {
+  const camera = useThree((state) => state.camera)
+
+  useFrame(() => {
+    if (
+      shouldRefreshChunkWindow(
+        chunkAnchor,
+        camera.position.x,
+        camera.position.z,
+        DEFAULT_TERRAIN_CHUNK_SIZE
+      )
+    ) {
+      onChunkAnchorChange(
+        getChunkAnchor(
+          camera.position.x,
+          camera.position.z,
+          DEFAULT_TERRAIN_CHUNK_SIZE
+        )
+      )
+    }
+  })
+
+  return null
+}
+
 function OrbitCamera() {
   const camera = useThree((state) => state.camera)
   const gl = useThree((state) => state.gl)
 
   const controls = useMemo(() => {
     const nextControls = new OrbitControls(camera, gl.domElement)
-    camera.position.set(54, 32, 56)
+    camera.position.set(96, 48, 96)
     camera.lookAt(0, 10, 0)
     nextControls.enableDamping = true
     nextControls.dampingFactor = 0.06
-    nextControls.maxDistance = 180
+    nextControls.maxDistance = 360
     nextControls.maxPolarAngle = Math.PI * 0.46
     nextControls.minDistance = 22
     nextControls.minPolarAngle = Math.PI * 0.12
