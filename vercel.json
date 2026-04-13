@@ -1,5 +1,0 @@
-{
-  "installCommand": "bun install",
-  "buildCommand": "npx convex deploy --cmd 'bun run build'",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
-}
