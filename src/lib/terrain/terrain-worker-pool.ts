@@ -158,5 +158,5 @@ function getDefaultTerrainWorkerCount() {
     return 1
   }
 
-  return Math.max(1, Math.min(4, (navigator.hardwareConcurrency ?? 4) - 1))
+  return Math.max(1, Math.min(7, (navigator.hardwareConcurrency ?? 8) - 1))
 }

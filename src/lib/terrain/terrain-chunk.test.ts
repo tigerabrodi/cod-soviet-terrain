@@ -68,6 +68,19 @@ describe('buildTerrainChunk', () => {
     }
   })
 
+  it('can build chunk buffers on SharedArrayBuffer for worker sharing', () => {
+    const chunkBuffers = generateTerrainChunkBuffers({
+      resolution: 8,
+      sharedArrayBuffer: true,
+      size: 32,
+    })
+
+    expect(chunkBuffers.positions.buffer).toBeInstanceOf(SharedArrayBuffer)
+    expect(chunkBuffers.normals.buffer).toBeInstanceOf(SharedArrayBuffer)
+    expect(chunkBuffers.splatWeights.buffer).toBeInstanceOf(SharedArrayBuffer)
+    expect(chunkBuffers.indices.buffer).toBeInstanceOf(SharedArrayBuffer)
+  })
+
   it('adds edge skirts when requested to hide lod cracks', () => {
     const chunkBuffers = generateTerrainChunkBuffers({
       resolution: 4,
@@ -86,6 +99,61 @@ describe('buildTerrainChunk', () => {
       expect(geometry.index?.count).toBe(192)
     } finally {
       geometry.dispose()
+    }
+  })
+
+  it('snaps stitched edges to the coarser lod boundary shape', () => {
+    const unstitchedChunk = buildTerrainChunk({
+      resolution: 8,
+      size: 32,
+    })
+    const stitchedChunk = buildTerrainChunk({
+      edgeMorph: { east: 1, north: 0, south: 0, west: 0 },
+      resolution: 8,
+      size: 32,
+    })
+
+    try {
+      const unstitchedEdgeHeights = getSortedEdgeHeights(
+        unstitchedChunk.geometry,
+        'east'
+      )
+      const stitchedEdgeHeights = getSortedEdgeHeights(
+        stitchedChunk.geometry,
+        'east'
+      )
+
+      expect(stitchedEdgeHeights[0]).toBeCloseTo(unstitchedEdgeHeights[0], 6)
+      expect(stitchedEdgeHeights[4]).toBeCloseTo(unstitchedEdgeHeights[4], 6)
+      expect(stitchedEdgeHeights[8]).toBeCloseTo(unstitchedEdgeHeights[8], 6)
+
+      expect(stitchedEdgeHeights[1]).toBeCloseTo(
+        lerp(unstitchedEdgeHeights[0], unstitchedEdgeHeights[4], 0.25),
+        6
+      )
+      expect(stitchedEdgeHeights[2]).toBeCloseTo(
+        lerp(unstitchedEdgeHeights[0], unstitchedEdgeHeights[4], 0.5),
+        6
+      )
+      expect(stitchedEdgeHeights[3]).toBeCloseTo(
+        lerp(unstitchedEdgeHeights[0], unstitchedEdgeHeights[4], 0.75),
+        6
+      )
+      expect(stitchedEdgeHeights[5]).toBeCloseTo(
+        lerp(unstitchedEdgeHeights[4], unstitchedEdgeHeights[8], 0.25),
+        6
+      )
+      expect(stitchedEdgeHeights[6]).toBeCloseTo(
+        lerp(unstitchedEdgeHeights[4], unstitchedEdgeHeights[8], 0.5),
+        6
+      )
+      expect(stitchedEdgeHeights[7]).toBeCloseTo(
+        lerp(unstitchedEdgeHeights[4], unstitchedEdgeHeights[8], 0.75),
+        6
+      )
+    } finally {
+      unstitchedChunk.geometry.dispose()
+      stitchedChunk.geometry.dispose()
     }
   })
 
@@ -119,6 +187,34 @@ describe('buildTerrainChunk', () => {
         }
 
         expect(total).toBeCloseTo(1, 5)
+      }
+    } finally {
+      geometry.dispose()
+    }
+  })
+
+  it('builds planet chunk normals facing away from the planet center', () => {
+    const { geometry } = buildTerrainChunk({
+      centerX: 0,
+      centerY: 0,
+      face: 'positive-y',
+      mode: 'planet',
+      origin: [0, 0, 0],
+      resolution: 8,
+      size: 180,
+    })
+
+    try {
+      const positions = geometry.getAttribute('position')
+      const normals = geometry.getAttribute('normal')
+
+      for (let index = 0; index < positions.count; index += 1) {
+        const dot =
+          positions.getX(index) * normals.getX(index) +
+          positions.getY(index) * normals.getY(index) +
+          positions.getZ(index) * normals.getZ(index)
+
+        expect(dot).toBeGreaterThan(0)
       }
     } finally {
       geometry.dispose()
@@ -176,3 +272,41 @@ describe('buildTerrainChunk', () => {
     }
   })
 })
+
+function getSortedEdgeHeights(
+  geometry: ReturnType<typeof buildTerrainChunk>['geometry'],
+  edge: 'east' | 'north' | 'south' | 'west'
+) {
+  const positions = geometry.getAttribute('position')
+  const heights: Array<{ coordinate: number; height: number }> = []
+
+  for (let index = 0; index < positions.count; index += 1) {
+    const x = positions.getX(index)
+    const y = positions.getY(index)
+    const z = positions.getZ(index)
+
+    if (edge === 'east' && Math.abs(x - 16) <= 0.000001) {
+      heights.push({ coordinate: z, height: y })
+    }
+
+    if (edge === 'west' && Math.abs(x + 16) <= 0.000001) {
+      heights.push({ coordinate: z, height: y })
+    }
+
+    if (edge === 'north' && Math.abs(z + 16) <= 0.000001) {
+      heights.push({ coordinate: x, height: y })
+    }
+
+    if (edge === 'south' && Math.abs(z - 16) <= 0.000001) {
+      heights.push({ coordinate: x, height: y })
+    }
+  }
+
+  return heights
+    .sort((left, right) => left.coordinate - right.coordinate)
+    .map((entry) => entry.height)
+}
+
+function lerp(start: number, end: number, amount: number) {
+  return start + (end - start) * amount
+}

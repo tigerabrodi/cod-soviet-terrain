@@ -9,18 +9,16 @@ import type {
 const workerScope = self as DedicatedWorkerGlobalScope
 
 workerScope.onmessage = (event: MessageEvent<TerrainChunkWorkerRequest>) => {
-  const chunk = generateTerrainChunkBuffers(event.data.options)
+  const chunk = generateTerrainChunkBuffers({
+    ...event.data.options,
+    sharedArrayBuffer: true,
+  })
   const response: TerrainChunkWorkerResponse = {
     chunk,
     requestId: event.data.requestId,
   }
 
-  workerScope.postMessage(response, [
-    chunk.positions.buffer,
-    chunk.normals.buffer,
-    chunk.splatWeights.buffer,
-    chunk.indices.buffer,
-  ])
+  workerScope.postMessage(response)
 }
 
 export {}

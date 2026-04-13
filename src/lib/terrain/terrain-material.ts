@@ -12,7 +12,6 @@ import {
   float,
   mix,
   normalLocal,
-  positionLocal,
   smoothstep,
   texture,
   transformNormalToView,
@@ -24,6 +23,8 @@ import type { TerrainTextureSet } from './terrain-textures'
 const TILE_SCALE = float(0.085)
 const DETAIL_NORMAL_STRENGTH = float(0.6)
 const GEOMETRY_NORMAL_STRENGTH = float(0.4)
+const terrainCoords = attribute('terrainCoords', 'vec3')
+const terrainHeight = attribute('terrainHeight', 'float')
 
 const getProjectionWeights = Fn(([surfaceNormal = normalLocal]) => {
   const axisWeights = surfaceNormal.abs().add(0.0001).toVar()
@@ -42,7 +43,7 @@ const sampleTriplanarArray = Fn(
     textureNode,
     layerIndex,
     scaleNode = TILE_SCALE,
-    positionNode = positionLocal,
+    positionNode = terrainCoords,
     surfaceNormal = normalLocal,
   ]) => {
     const projectionWeights = getProjectionWeights(surfaceNormal)
@@ -69,7 +70,7 @@ const sampleTriplanarNormal = Fn(
     textureNode,
     layerIndex,
     scaleNode = TILE_SCALE,
-    positionNode = positionLocal,
+    positionNode = terrainCoords,
     surfaceNormal = normalLocal,
   ]) => {
     const projectionWeights = getProjectionWeights(surfaceNormal)
@@ -236,7 +237,7 @@ export function createTerrainMaterial(textures: TerrainTextureSet) {
     .add(layeredNormal.mul(DETAIL_NORMAL_STRENGTH))
     .normalize()
 
-  const frostAmount = smoothstep(float(16), float(30), positionLocal.y)
+  const frostAmount = smoothstep(float(16), float(30), terrainHeight)
   const finalColor = mix(
     blendedColor,
     blendedColor.mul(vec3(1.04, 1.05, 1.08)),

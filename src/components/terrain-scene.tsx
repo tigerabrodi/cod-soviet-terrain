@@ -1,21 +1,22 @@
 import {
   createTerrainChunkGeometry,
-  DEFAULT_TERRAIN_CHUNK_RESOLUTION,
-  DEFAULT_TERRAIN_CHUNK_SIZE,
+  samplePlanetTerrainHeight,
   type TerrainChunkStats,
 } from '@/lib/terrain/terrain-chunk'
 import { createTerrainMaterial } from '@/lib/terrain/terrain-material'
 import {
-  getChunkAnchor,
-  selectChunkWindow,
-  shouldRefreshChunkWindow,
-  type TerrainChunkAnchor,
-  type TerrainChunkDescriptor,
-} from '@/lib/terrain/terrain-streaming'
+  PLANET_RADIUS,
+  getPlanetChunkEdgeMorphs,
+  selectPlanetChunkWindow,
+  type PlanetChunkDescriptor,
+  type TerrainChunkEdgeMorph,
+  type Vec3Like,
+} from '@/lib/terrain/terrain-planet'
 import { loadTerrainTextureSet } from '@/lib/terrain/terrain-textures'
 import { TerrainChunkWorkerPool } from '@/lib/terrain/terrain-worker-pool'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { SphereGeometry } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js'
 import {
@@ -40,20 +41,32 @@ export interface TerrainSceneProps {
 
 export type CameraMode = 'fly' | 'orbit'
 
-interface TerrainChunkRuntime extends TerrainChunkDescriptor {
+interface TerrainChunkRuntime extends PlanetChunkDescriptor {
+  buildOrigin: readonly [number, number, number]
+  edgeMorph: TerrainChunkEdgeMorph
   geometry: ReturnType<typeof createTerrainChunkGeometry>
+  sharedArrayBufferBacked: boolean
   stats: TerrainChunkStats
 }
 
-const INITIAL_FLY_CAMERA_POSITION = [10, 9, 20] as const
-const INITIAL_ORBIT_CAMERA_POSITION = [96, 48, 96] as const
-const TERRAIN_CHUNK_SKIRT_DEPTH = 18
-const TERRAIN_LOD_RESOLUTIONS = [
-  DEFAULT_TERRAIN_CHUNK_RESOLUTION,
-  32,
-  16,
-] as const
-const TERRAIN_STREAM_RADIUS = TERRAIN_LOD_RESOLUTIONS.length - 1
+const PLANET_LOD_RESOLUTIONS = [64, 32, 16] as const
+const PLANET_CHUNK_SKIRT_DEPTH = 22
+const FLOATING_ORIGIN_SHIFT_DISTANCE = 220
+const FOCUS_REFRESH_DISTANCE = 56
+const ZERO_EDGE_MORPH: TerrainChunkEdgeMorph = {
+  east: 0,
+  north: 0,
+  south: 0,
+  west: 0,
+}
+
+const INITIAL_FLY_WORLD_ORIGIN = {
+  x: 0,
+  y: PLANET_RADIUS + 18,
+  z: 0,
+} satisfies Vec3Like
+
+const INITIAL_ORBIT_CAMERA_POSITION = [640, 460, 640] as const
 
 export function TerrainScene({
   cameraMode,
@@ -63,8 +76,8 @@ export function TerrainScene({
   return (
     <Canvas
       camera={{
-        far: 900,
-        fov: 42,
+        far: 3200,
+        fov: 38,
         near: 0.1,
         position: [...INITIAL_ORBIT_CAMERA_POSITION],
       }}
@@ -73,8 +86,8 @@ export function TerrainScene({
       gl={createTerrainRenderer}
       shadows
     >
-      <color attach="background" args={['#0b1015']} />
-      <fog attach="fog" args={['#95a3af', 150, 520]} />
+      <color attach="background" args={['#081018']} />
+      <fog attach="fog" args={['#8ea0b4', 640, 2200]} />
       <TerrainWorld
         cameraMode={cameraMode}
         onBackendChange={onBackendChange}
@@ -89,6 +102,7 @@ async function createTerrainRenderer(defaultProps: unknown) {
   const renderer = new WebGPURenderer({
     ...rendererProps,
     antialias: true,
+    logarithmicDepthBuffer: true,
   })
 
   await renderer.init()
@@ -106,43 +120,82 @@ function TerrainWorld({
   onBackendChange,
   onReadyChange,
 }: TerrainSceneProps) {
+  const camera = useThree((state) => state.camera)
   const gl = useThree((state) => state.gl)
 
   const [isMaterialReady, setIsMaterialReady] = useState(false)
-  const [chunkAnchor, setChunkAnchor] = useState<TerrainChunkAnchor>(() =>
-    getChunkAnchor(
-      INITIAL_ORBIT_CAMERA_POSITION[0],
-      INITIAL_ORBIT_CAMERA_POSITION[2],
-      DEFAULT_TERRAIN_CHUNK_SIZE
-    )
-  )
   const [terrainChunks, setTerrainChunks] = useState<
     Record<string, TerrainChunkRuntime>
   >({})
   const [terrainMaterial, setTerrainMaterial] = useState<ReturnType<
     typeof createTerrainMaterial
   > | null>(null)
+  const [worldOrigin, setWorldOrigin] = useState<Vec3Like>(
+    () => getModeSetup(cameraMode).worldOrigin
+  )
+  const [cameraFocusWorld, setCameraFocusWorld] = useState<Vec3Like>(
+    () => getModeSetup(cameraMode).cameraFocusWorld
+  )
+  const planetBackdropGeometry = useMemo(
+    () => createPlanetBackdropGeometry(),
+    []
+  )
+
   const desiredChunkDescriptors = useMemo(
     () =>
-      selectChunkWindow(
-        chunkAnchor,
-        DEFAULT_TERRAIN_CHUNK_SIZE,
-        TERRAIN_STREAM_RADIUS,
-        TERRAIN_LOD_RESOLUTIONS
+      selectPlanetChunkWindow(
+        cameraFocusWorld,
+        PLANET_LOD_RESOLUTIONS,
+        PLANET_RADIUS
       ),
-    [chunkAnchor]
+    [cameraFocusWorld]
   )
-  const desiredChunkLookupRef = useRef(
-    new Map<string, TerrainChunkDescriptor>()
+  const desiredEdgeMorphs = useMemo(
+    () => getPlanetChunkEdgeMorphs(desiredChunkDescriptors),
+    [desiredChunkDescriptors]
   )
-  const inflightChunkLookupRef = useRef(new Map<string, number>())
+  const desiredChunkLookupRef = useRef(new Map<string, PlanetChunkDescriptor>())
+  const desiredEdgeMorphLookupRef = useRef(
+    new Map<string, TerrainChunkEdgeMorph>()
+  )
+  const inflightChunkLookupRef = useRef(new Map<string, string>())
   const terrainChunksRef = useRef<Record<string, TerrainChunkRuntime>>({})
   const workerPoolRef = useRef<TerrainChunkWorkerPool | null>(null)
   const isTerrainWindowReady = desiredChunkDescriptors.every((terrainChunk) => {
-    const loadedChunk = terrainChunks[terrainChunk.key]
-    return loadedChunk?.resolution === terrainChunk.resolution
+    const activeChunk = terrainChunks[terrainChunk.key]
+    const desiredEdgeMorph =
+      desiredEdgeMorphs.get(terrainChunk.key) ?? ZERO_EDGE_MORPH
+
+    return (
+      activeChunk?.resolution === terrainChunk.resolution &&
+      edgeMorphEquals(activeChunk.edgeMorph, desiredEdgeMorph)
+    )
   })
   const isSceneReady = isMaterialReady && isTerrainWindowReady
+
+  useEffect(() => {
+    const setup = getModeSetup(cameraMode)
+    const resetId = window.requestAnimationFrame(() => {
+      setWorldOrigin(setup.worldOrigin)
+      setCameraFocusWorld(setup.cameraFocusWorld)
+    })
+
+    camera.position.set(
+      setup.localCameraPosition[0],
+      setup.localCameraPosition[1],
+      setup.localCameraPosition[2]
+    )
+    camera.up.set(0, 1, 0)
+    camera.lookAt(
+      setup.localLookAt[0],
+      setup.localLookAt[1],
+      setup.localLookAt[2]
+    )
+
+    return () => {
+      window.cancelAnimationFrame(resetId)
+    }
+  }, [camera, cameraMode])
 
   useEffect(() => {
     const backend =
@@ -175,7 +228,7 @@ function TerrainWorld({
     return () => {
       isMounted = false
     }
-  }, [gl, onReadyChange])
+  }, [gl])
 
   useEffect(() => {
     terrainChunksRef.current = terrainChunks
@@ -184,6 +237,31 @@ function TerrainWorld({
   useEffect(() => {
     onReadyChange?.(isSceneReady)
   }, [isSceneReady, onReadyChange])
+
+  useEffect(() => {
+    const debugState = {
+      cameraMode,
+      chunkCount: Object.keys(terrainChunks).length,
+      sharedBufferChunks: Object.values(terrainChunks).filter(
+        (terrainChunk) => terrainChunk.sharedArrayBufferBacked
+      ).length,
+      worldOrigin,
+    }
+
+    ;(
+      window as Window & {
+        __terrainDebug?: typeof debugState
+      }
+    ).__terrainDebug = debugState
+
+    return () => {
+      delete (
+        window as Window & {
+          __terrainDebug?: typeof debugState
+        }
+      ).__terrainDebug
+    }
+  }, [cameraMode, terrainChunks, worldOrigin])
 
   useEffect(() => {
     const workerPool = new TerrainChunkWorkerPool()
@@ -204,6 +282,12 @@ function TerrainWorld({
       desiredChunkDescriptors.map((terrainChunk) => [
         terrainChunk.key,
         terrainChunk,
+      ])
+    )
+    desiredEdgeMorphLookupRef.current = new Map(
+      desiredChunkDescriptors.map((terrainChunk) => [
+        terrainChunk.key,
+        desiredEdgeMorphs.get(terrainChunk.key) ?? ZERO_EDGE_MORPH,
       ])
     )
 
@@ -236,44 +320,53 @@ function TerrainWorld({
           return left.lodLevel - right.lodLevel
         }
 
-        if (left.gridDistance !== right.gridDistance) {
-          return left.gridDistance - right.gridDistance
-        }
-
-        if (left.gridZ !== right.gridZ) {
-          return left.gridZ - right.gridZ
-        }
-
-        return left.gridX - right.gridX
+        return (
+          getDistance(cameraFocusWorld, left.sphereCenter) -
+          getDistance(cameraFocusWorld, right.sphereCenter)
+        )
       }
     )
 
     for (const terrainChunk of prioritizedChunks) {
-      const loadedChunk = terrainChunksRef.current[terrainChunk.key]
-      const inflightResolution = inflightChunkLookupRef.current.get(
+      const edgeMorph =
+        desiredEdgeMorphLookupRef.current.get(terrainChunk.key) ??
+        ZERO_EDGE_MORPH
+      const activeChunk = terrainChunksRef.current[terrainChunk.key]
+      const requestSignature = getChunkRequestSignature(
+        terrainChunk.resolution,
+        edgeMorph
+      )
+      const inflightSignature = inflightChunkLookupRef.current.get(
         terrainChunk.key
       )
 
-      if (loadedChunk?.resolution === terrainChunk.resolution) {
+      if (
+        activeChunk?.resolution === terrainChunk.resolution &&
+        edgeMorphEquals(activeChunk.edgeMorph, edgeMorph)
+      ) {
         continue
       }
 
-      if (inflightResolution === terrainChunk.resolution) {
+      if (inflightSignature === requestSignature) {
         continue
       }
 
-      inflightChunkLookupRef.current.set(
-        terrainChunk.key,
-        terrainChunk.resolution
-      )
+      inflightChunkLookupRef.current.set(terrainChunk.key, requestSignature)
+
+      const buildOrigin = toOriginTuple(worldOrigin)
 
       workerPool
         .requestChunk({
-          offsetX: terrainChunk.worldX,
-          offsetZ: terrainChunk.worldZ,
+          centerX: terrainChunk.centerX,
+          centerY: terrainChunk.centerY,
+          edgeMorph,
+          face: terrainChunk.face,
+          mode: 'planet',
+          origin: buildOrigin,
+          planetRadius: PLANET_RADIUS,
           resolution: terrainChunk.resolution,
-          size: DEFAULT_TERRAIN_CHUNK_SIZE,
-          skirtDepth: TERRAIN_CHUNK_SKIRT_DEPTH,
+          size: terrainChunk.size,
+          skirtDepth: PLANET_CHUNK_SKIRT_DEPTH,
         })
         .then((chunkBuffers) => {
           inflightChunkLookupRef.current.delete(terrainChunk.key)
@@ -281,10 +374,14 @@ function TerrainWorld({
           const desiredChunk = desiredChunkLookupRef.current.get(
             terrainChunk.key
           )
+          const desiredEdgeMorph =
+            desiredEdgeMorphLookupRef.current.get(terrainChunk.key) ??
+            ZERO_EDGE_MORPH
 
           if (
             !desiredChunk ||
-            desiredChunk.resolution !== terrainChunk.resolution
+            desiredChunk.resolution !== terrainChunk.resolution ||
+            !edgeMorphEquals(desiredEdgeMorph, edgeMorph)
           ) {
             return
           }
@@ -292,22 +389,27 @@ function TerrainWorld({
           const geometry = createTerrainChunkGeometry(chunkBuffers)
 
           setTerrainChunks((currentTerrainChunks) => {
-            const activeChunk = currentTerrainChunks[terrainChunk.key]
+            const currentChunk = currentTerrainChunks[terrainChunk.key]
 
-            if (activeChunk?.resolution === desiredChunk.resolution) {
+            if (
+              currentChunk?.resolution === desiredChunk.resolution &&
+              edgeMorphEquals(currentChunk.edgeMorph, desiredEdgeMorph)
+            ) {
               geometry.dispose()
               return currentTerrainChunks
             }
 
-            if (activeChunk) {
-              activeChunk.geometry.dispose()
-            }
+            currentChunk?.geometry.dispose()
 
             const nextTerrainChunks = {
               ...currentTerrainChunks,
               [terrainChunk.key]: {
                 ...desiredChunk,
+                buildOrigin,
+                edgeMorph: desiredEdgeMorph,
                 geometry,
+                sharedArrayBufferBacked:
+                  chunkBuffers.positions.buffer instanceof SharedArrayBuffer,
                 stats: chunkBuffers.stats,
               },
             }
@@ -321,40 +423,63 @@ function TerrainWorld({
           console.error('Failed to build terrain chunk in worker.', error)
         })
     }
-  }, [desiredChunkDescriptors])
+  }, [
+    cameraFocusWorld,
+    desiredChunkDescriptors,
+    desiredEdgeMorphs,
+    worldOrigin,
+  ])
 
   useEffect(() => {
     return () => {
+      planetBackdropGeometry.dispose()
       terrainMaterial?.dispose()
     }
-  }, [terrainMaterial])
+  }, [planetBackdropGeometry, terrainMaterial])
 
   return (
     <>
-      <ambientLight intensity={0.28} />
+      <ambientLight intensity={0.22} />
       <hemisphereLight
-        args={['#d4def0', '#231a15', 1.15]}
-        groundColor="#30251f"
+        args={['#cfdbec', '#1b1411', 1.1]}
+        groundColor="#2b221c"
       />
       <directionalLight
         castShadow
-        color="#ffe4bf"
-        intensity={2.8}
-        position={[56, 82, 42]}
+        color="#ffe1bf"
+        intensity={2.4}
+        position={[520, 860, 340]}
         shadow-bias={-0.00008}
         shadow-mapSize-height={2048}
         shadow-mapSize-width={2048}
       />
+      <mesh
+        geometry={planetBackdropGeometry}
+        position={[-worldOrigin.x, -worldOrigin.y, -worldOrigin.z]}
+        receiveShadow
+      >
+        <meshStandardMaterial color="#544c45" roughness={1} />
+      </mesh>
+      <mesh
+        position={[-worldOrigin.x, -worldOrigin.y, -worldOrigin.z]}
+        receiveShadow
+      >
+        <sphereGeometry args={[PLANET_RADIUS - 24, 48, 28]} />
+        <meshStandardMaterial color="#0e151c" roughness={1} />
+      </mesh>
       {Object.values(terrainChunks).map((terrainChunk) => (
         <mesh
           geometry={terrainChunk.geometry}
           key={terrainChunk.key}
-          position={[terrainChunk.worldX, 0, terrainChunk.worldZ]}
+          material={terrainMaterial ?? undefined}
+          position={[
+            terrainChunk.buildOrigin[0] - worldOrigin.x,
+            terrainChunk.buildOrigin[1] - worldOrigin.y,
+            terrainChunk.buildOrigin[2] - worldOrigin.z,
+          ]}
           receiveShadow
         >
-          {terrainMaterial ? (
-            <primitive attach="material" object={terrainMaterial} />
-          ) : (
+          {terrainMaterial ? null : (
             <meshStandardMaterial
               color="#616971"
               metalness={0.02}
@@ -363,63 +488,62 @@ function TerrainWorld({
           )}
         </mesh>
       ))}
-      <mesh
-        position={[
-          chunkAnchor.gridX * DEFAULT_TERRAIN_CHUNK_SIZE,
-          -0.35,
-          chunkAnchor.gridZ * DEFAULT_TERRAIN_CHUNK_SIZE,
-        ]}
-        receiveShadow
-        rotation={[-Math.PI / 2, 0, 0]}
-      >
-        <circleGeometry
-          args={[
-            DEFAULT_TERRAIN_CHUNK_SIZE * (TERRAIN_STREAM_RADIUS + 1.85),
-            64,
-          ]}
-        />
-        <meshStandardMaterial color="#14191f" roughness={1} />
-      </mesh>
-      <ChunkStreamTracker
-        chunkAnchor={chunkAnchor}
-        onChunkAnchorChange={setChunkAnchor}
+      <FloatingOriginTracker
+        cameraFocusWorld={cameraFocusWorld}
+        cameraMode={cameraMode}
+        onCameraFocusWorldChange={setCameraFocusWorld}
+        onWorldOriginChange={setWorldOrigin}
+        worldOrigin={worldOrigin}
       />
       {cameraMode === 'fly' ? <FlyCamera /> : <OrbitCamera />}
       {isSceneReady ? null : (
-        <mesh position={[0, 26, -46]}>
-          <planeGeometry args={[26, 6]} />
-          <meshBasicMaterial color="#10161d" opacity={0.35} transparent />
+        <mesh position={[0, PLANET_RADIUS * 0.45, 0]}>
+          <sphereGeometry args={[42, 20, 12]} />
+          <meshBasicMaterial color="#0c1117" opacity={0.22} transparent />
         </mesh>
       )}
     </>
   )
 }
 
-function ChunkStreamTracker({
-  chunkAnchor,
-  onChunkAnchorChange,
+function FloatingOriginTracker({
+  cameraFocusWorld,
+  cameraMode,
+  onCameraFocusWorldChange,
+  onWorldOriginChange,
+  worldOrigin,
 }: {
-  chunkAnchor: TerrainChunkAnchor
-  onChunkAnchorChange: (anchor: TerrainChunkAnchor) => void
+  cameraFocusWorld: Vec3Like
+  cameraMode: CameraMode
+  onCameraFocusWorldChange: (cameraFocusWorld: Vec3Like) => void
+  onWorldOriginChange: (worldOrigin: Vec3Like) => void
+  worldOrigin: Vec3Like
 }) {
   const camera = useThree((state) => state.camera)
 
   useFrame(() => {
+    let nextWorldCameraPosition = {
+      x: worldOrigin.x + camera.position.x,
+      y: worldOrigin.y + camera.position.y,
+      z: worldOrigin.z + camera.position.z,
+    }
+
     if (
-      shouldRefreshChunkWindow(
-        chunkAnchor,
-        camera.position.x,
-        camera.position.z,
-        DEFAULT_TERRAIN_CHUNK_SIZE
-      )
+      cameraMode === 'fly' &&
+      camera.position.length() >= FLOATING_ORIGIN_SHIFT_DISTANCE
     ) {
-      onChunkAnchorChange(
-        getChunkAnchor(
-          camera.position.x,
-          camera.position.z,
-          DEFAULT_TERRAIN_CHUNK_SIZE
-        )
-      )
+      onWorldOriginChange(nextWorldCameraPosition)
+      camera.position.set(0, 0, 0)
+      nextWorldCameraPosition = {
+        ...nextWorldCameraPosition,
+      }
+    }
+
+    if (
+      getDistance(nextWorldCameraPosition, cameraFocusWorld) >=
+      FOCUS_REFRESH_DISTANCE
+    ) {
+      onCameraFocusWorldChange(nextWorldCameraPosition)
     }
   })
 
@@ -432,20 +556,21 @@ function OrbitCamera() {
 
   const controls = useMemo(() => {
     const nextControls = new OrbitControls(camera, gl.domElement)
-    camera.position.set(...INITIAL_ORBIT_CAMERA_POSITION)
-    camera.lookAt(0, 10, 0)
     nextControls.enableDamping = true
     nextControls.dampingFactor = 0.06
-    nextControls.maxDistance = 360
-    nextControls.maxPolarAngle = Math.PI * 0.46
-    nextControls.minDistance = 22
-    nextControls.minPolarAngle = Math.PI * 0.12
-    nextControls.target.set(0, 10, 0)
+    nextControls.enablePan = false
+    nextControls.maxDistance = 1600
+    nextControls.maxPolarAngle = Math.PI * 0.94
+    nextControls.minDistance = 220
+    nextControls.minPolarAngle = Math.PI * 0.06
+    nextControls.target.set(0, 0, 0)
 
     return nextControls
   }, [camera, gl.domElement])
 
   useEffect(() => {
+    controls.target.set(0, 0, 0)
+
     return () => {
       controls.dispose()
     }
@@ -464,13 +589,10 @@ function FlyCamera() {
   const keyState = useRef<Record<string, boolean>>({})
 
   const controls = useMemo(() => {
-    camera.position.set(...INITIAL_FLY_CAMERA_POSITION)
-    camera.lookAt(0, 9, 0)
-
     const nextControls = new PointerLockControls(camera, gl.domElement)
-    nextControls.pointerSpeed = 0.75
-    nextControls.minPolarAngle = Math.PI * 0.08
-    nextControls.maxPolarAngle = Math.PI * 0.92
+    nextControls.pointerSpeed = 0.72
+    nextControls.minPolarAngle = Math.PI * 0.04
+    nextControls.maxPolarAngle = Math.PI * 0.96
 
     return nextControls
   }, [camera, gl.domElement])
@@ -498,39 +620,125 @@ function FlyCamera() {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
       gl.domElement.removeEventListener('click', handleCanvasClick)
+
       if (controls.isLocked) {
         controls.unlock()
       }
+
       controls.dispose()
     }
   }, [controls, gl.domElement])
 
   useFrame((_, delta) => {
     const isBoosting = keyState.current.ShiftLeft || keyState.current.ShiftRight
-    const moveSpeed = (isBoosting ? 34 : 16) * delta
-    const verticalSpeed = (isBoosting ? 22 : 10) * delta
+    const moveSpeed = (isBoosting ? 42 : 18) * delta
+    const verticalSpeed = (isBoosting ? 36 : 14) * delta
 
     if (keyState.current.KeyW) {
       controls.moveForward(moveSpeed)
     }
+
     if (keyState.current.KeyS) {
       controls.moveForward(-moveSpeed)
     }
+
     if (keyState.current.KeyA) {
       controls.moveRight(-moveSpeed)
     }
+
     if (keyState.current.KeyD) {
       controls.moveRight(moveSpeed)
     }
+
     if (keyState.current.KeyE) {
       camera.position.setY(camera.position.y + verticalSpeed)
     }
+
     if (keyState.current.KeyQ) {
       camera.position.setY(camera.position.y - verticalSpeed)
     }
-
-    camera.position.setY(Math.max(camera.position.y, 3))
   })
 
   return null
+}
+
+function edgeMorphEquals(
+  left: TerrainChunkEdgeMorph,
+  right: TerrainChunkEdgeMorph
+) {
+  return (
+    left.east === right.east &&
+    left.north === right.north &&
+    left.south === right.south &&
+    left.west === right.west
+  )
+}
+
+function getChunkRequestSignature(
+  resolution: number,
+  edgeMorph: TerrainChunkEdgeMorph
+) {
+  return `${resolution}:${edgeMorph.east}:${edgeMorph.north}:${edgeMorph.south}:${edgeMorph.west}`
+}
+
+function getModeSetup(cameraMode: CameraMode) {
+  if (cameraMode === 'fly') {
+    return {
+      cameraFocusWorld: INITIAL_FLY_WORLD_ORIGIN,
+      localCameraPosition: [0, 0, 0] as const,
+      localLookAt: [64, -10, 84] as const,
+      worldOrigin: INITIAL_FLY_WORLD_ORIGIN,
+    }
+  }
+
+  return {
+    cameraFocusWorld: {
+      x: INITIAL_ORBIT_CAMERA_POSITION[0],
+      y: INITIAL_ORBIT_CAMERA_POSITION[1],
+      z: INITIAL_ORBIT_CAMERA_POSITION[2],
+    },
+    localCameraPosition: INITIAL_ORBIT_CAMERA_POSITION,
+    localLookAt: [0, 0, 0] as const,
+    worldOrigin: { x: 0, y: 0, z: 0 },
+  }
+}
+
+function getDistance(left: Vec3Like, right: Vec3Like) {
+  return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z)
+}
+
+function toOriginTuple(vector: Vec3Like): readonly [number, number, number] {
+  return [vector.x, vector.y, vector.z]
+}
+
+function createPlanetBackdropGeometry() {
+  const geometry = new SphereGeometry(PLANET_RADIUS - 8, 72, 44)
+  const positions = geometry.getAttribute('position')
+
+  for (let index = 0; index < positions.count; index += 1) {
+    const x = positions.getX(index)
+    const y = positions.getY(index)
+    const z = positions.getZ(index)
+    const length = Math.hypot(x, y, z) || 1
+    const up = {
+      x: x / length,
+      y: y / length,
+      z: z / length,
+    }
+    const height = samplePlanetTerrainHeight(
+      up.x * PLANET_RADIUS,
+      up.y * PLANET_RADIUS,
+      up.z * PLANET_RADIUS
+    )
+    const radius = PLANET_RADIUS + height - 10
+
+    positions.setXYZ(index, up.x * radius, up.y * radius, up.z * radius)
+  }
+
+  positions.needsUpdate = true
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+
+  return geometry
 }

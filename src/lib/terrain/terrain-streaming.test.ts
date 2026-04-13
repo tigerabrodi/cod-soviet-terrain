@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   getChunkAnchor,
+  selectQuadtreeChunkWindow,
   selectChunkWindow,
   shouldRefreshChunkWindow,
 } from './terrain-streaming'
@@ -87,5 +88,50 @@ describe('shouldRefreshChunkWindow', () => {
     expect(shouldRefreshChunkWindow({ gridX: 0, gridZ: 0 }, 20, -95, 180)).toBe(
       true
     )
+  })
+})
+
+describe('selectQuadtreeChunkWindow', () => {
+  it('returns mixed quadtree leaf sizes around the camera focus', () => {
+    const chunkWindow = selectQuadtreeChunkWindow(0, 0, 180, [64, 32, 16])
+    const uniqueKeys = new Set(chunkWindow.map((chunk) => chunk.key))
+    const sizeCounts = chunkWindow.reduce<Record<number, number>>(
+      (counts, chunk) => {
+        counts[chunk.size] = (counts[chunk.size] ?? 0) + 1
+        return counts
+      },
+      {}
+    )
+
+    expect(uniqueKeys.size).toBe(chunkWindow.length)
+    expect(sizeCounts[180]).toBe(16)
+    expect(sizeCounts[360]).toBe(16)
+    expect(sizeCounts[720]).toBe(4)
+
+    expect(
+      chunkWindow.find((chunk) => chunk.worldX === -90 && chunk.worldZ === -90)
+    ).toMatchObject({
+      lodLevel: 0,
+      resolution: 64,
+      size: 180,
+    })
+
+    expect(
+      chunkWindow.find((chunk) => chunk.worldX === 540 && chunk.worldZ === -180)
+    ).toMatchObject({
+      lodLevel: 1,
+      resolution: 32,
+      size: 360,
+    })
+
+    expect(
+      chunkWindow.find(
+        (chunk) => chunk.worldX === -720 && chunk.worldZ === -720
+      )
+    ).toMatchObject({
+      lodLevel: 2,
+      resolution: 16,
+      size: 720,
+    })
   })
 })
