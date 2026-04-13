@@ -1,5 +1,4 @@
 import type { CompressedTexture } from 'three'
-import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js'
 import {
   ClampToEdgeWrapping,
   CompressedArrayTexture,
@@ -7,6 +6,7 @@ import {
   LinearMipmapLinearFilter,
   RepeatWrapping,
 } from 'three/webgpu'
+import { getSharedKTX2Loader } from '@/lib/shared/ktx2-loader'
 
 export const TERRAIN_MATERIAL_ORDER = [
   'scorched-ground',
@@ -34,7 +34,7 @@ export interface TerrainTextureSet {
   roughness: CompressedArrayTexture
 }
 
-type DetectSupportRenderer = Parameters<KTX2Loader['detectSupport']>[0]
+type DetectSupportRenderer = Parameters<typeof getSharedKTX2Loader>[0]
 
 const textureCache = new WeakMap<object, Promise<TerrainTextureSet>>()
 
@@ -56,9 +56,7 @@ export function loadTerrainTextureSet(renderer: DetectSupportRenderer) {
 }
 
 async function createTerrainTextureSet(renderer: DetectSupportRenderer) {
-  const loader = new KTX2Loader()
-  loader.setTranscoderPath('/basis/')
-  loader.detectSupport(renderer)
+  const loader = getSharedKTX2Loader(renderer)
 
   const loaded = await Promise.all(
     TERRAIN_MAP_TYPES.map(async (mapType) => {
@@ -71,8 +69,6 @@ async function createTerrainTextureSet(renderer: DetectSupportRenderer) {
       return [mapType, packCompressedArrayTexture(mapType, textures)] as const
     })
   )
-
-  loader.dispose()
 
   const textureEntries = Object.fromEntries(loaded)
 

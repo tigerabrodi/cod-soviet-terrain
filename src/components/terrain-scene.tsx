@@ -1,3 +1,6 @@
+import { FlyCameraController } from '@/components/fly-camera-controller'
+import { SnowParticles } from '@/components/snow-particles'
+import { createInitialFlyCameraState } from '@/lib/camera/fly-camera'
 import {
   createTerrainChunkGeometry,
   samplePlanetTerrainHeight,
@@ -17,10 +20,16 @@ import { TerrainChunkWorkerPool } from '@/lib/terrain/terrain-worker-pool'
 import { createSkyDomeGeometry } from '@/lib/sky/sky-dome'
 import { loadSkyEnvironment } from '@/lib/sky/sky-environment'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Euler, SphereGeometry, type Mesh } from 'three'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react'
+import { Camera, Euler, Group, SphereGeometry, type Mesh } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js'
 import {
   ACESFilmicToneMapping,
   BackSide,
@@ -56,7 +65,6 @@ interface TerrainChunkRuntime extends PlanetChunkDescriptor {
 
 const PLANET_LOD_RESOLUTIONS = [64, 32, 16] as const
 const PLANET_CHUNK_SKIRT_DEPTH = 22
-const FLOATING_ORIGIN_SHIFT_DISTANCE = 220
 const FOCUS_REFRESH_DISTANCE = 56
 const ZERO_EDGE_MORPH: TerrainChunkEdgeMorph = {
   east: 0,
@@ -64,14 +72,9 @@ const ZERO_EDGE_MORPH: TerrainChunkEdgeMorph = {
   south: 0,
   west: 0,
 }
-
-const INITIAL_FLY_WORLD_ORIGIN = {
-  x: 0,
-  y: PLANET_RADIUS + 18,
-  z: 0,
-} satisfies Vec3Like
-
 const INITIAL_ORBIT_CAMERA_POSITION = [640, 460, 640] as const
+const INITIAL_FLY_CAMERA_STATE = createInitialFlyCameraState()
+const ZERO_VECTOR = { x: 0, y: 0, z: 0 } as const
 
 export function TerrainScene({
   cameraMode,
@@ -136,7 +139,7 @@ function TerrainWorld({
   const [terrainMaterial, setTerrainMaterial] = useState<ReturnType<
     typeof createTerrainMaterial
   > | null>(null)
-  const [worldOrigin, setWorldOrigin] = useState<Vec3Like>(
+  const [worldOriginSnapshot, setWorldOriginSnapshot] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).worldOrigin
   )
   const [cameraFocusWorld, setCameraFocusWorld] = useState<Vec3Like>(
@@ -166,8 +169,10 @@ function TerrainWorld({
     new Map<string, TerrainChunkEdgeMorph>()
   )
   const inflightChunkLookupRef = useRef(new Map<string, string>())
+  const previousCameraModeRef = useRef<CameraMode | null>(null)
   const terrainChunksRef = useRef<Record<string, TerrainChunkRuntime>>({})
   const workerPoolRef = useRef<TerrainChunkWorkerPool | null>(null)
+  const worldOriginRef = useRef<Vec3Like>(getModeSetup(cameraMode).worldOrigin)
   const isTerrainWindowReady = desiredChunkDescriptors.every((terrainChunk) => {
     const activeChunk = terrainChunks[terrainChunk.key]
     const desiredEdgeMorph =
@@ -181,23 +186,21 @@ function TerrainWorld({
   const isSceneReady = isMaterialReady && isSkyReady && isTerrainWindowReady
 
   useEffect(() => {
-    const setup = getModeSetup(cameraMode)
-    const resetId = window.requestAnimationFrame(() => {
-      setWorldOrigin(setup.worldOrigin)
-      setCameraFocusWorld(setup.cameraFocusWorld)
-    })
+    const previousCameraMode = previousCameraModeRef.current
+    previousCameraModeRef.current = cameraMode
 
-    camera.position.set(
-      setup.localCameraPosition[0],
-      setup.localCameraPosition[1],
-      setup.localCameraPosition[2]
-    )
-    camera.up.set(0, 1, 0)
-    camera.lookAt(
-      setup.localLookAt[0],
-      setup.localLookAt[1],
-      setup.localLookAt[2]
-    )
+    if (previousCameraMode === cameraMode) {
+      return
+    }
+
+    const setup = getModeSetup(cameraMode)
+
+    worldOriginRef.current = setup.worldOrigin
+    const resetId = window.requestAnimationFrame(() => {
+      setWorldOriginSnapshot(setup.worldOrigin)
+      setCameraFocusWorld(setup.cameraFocusWorld)
+      applyCameraSetup(camera, setup)
+    })
 
     return () => {
       window.cancelAnimationFrame(resetId)
@@ -299,12 +302,13 @@ function TerrainWorld({
 
   useEffect(() => {
     const debugState = {
+      cameraFocusWorld,
       cameraMode,
       chunkCount: Object.keys(terrainChunks).length,
       sharedBufferChunks: Object.values(terrainChunks).filter(
         (terrainChunk) => terrainChunk.sharedArrayBufferBacked
       ).length,
-      worldOrigin,
+      worldOrigin: worldOriginSnapshot,
     }
 
     ;(
@@ -320,7 +324,7 @@ function TerrainWorld({
         }
       ).__terrainDebug
     }
-  }, [cameraMode, terrainChunks, worldOrigin])
+  }, [cameraFocusWorld, cameraMode, terrainChunks, worldOriginSnapshot])
 
   useEffect(() => {
     const workerPool = new TerrainChunkWorkerPool()
@@ -412,7 +416,7 @@ function TerrainWorld({
 
       inflightChunkLookupRef.current.set(terrainChunk.key, requestSignature)
 
-      const buildOrigin = toOriginTuple(worldOrigin)
+      const buildOrigin = toOriginTuple(worldOriginRef.current)
 
       workerPool
         .requestChunk({
@@ -482,12 +486,7 @@ function TerrainWorld({
           console.error('Failed to build terrain chunk in worker.', error)
         })
     }
-  }, [
-    cameraFocusWorld,
-    desiredChunkDescriptors,
-    desiredEdgeMorphs,
-    worldOrigin,
-  ])
+  }, [cameraFocusWorld, desiredChunkDescriptors, desiredEdgeMorphs])
 
   useEffect(() => {
     return () => {
@@ -500,6 +499,7 @@ function TerrainWorld({
   return (
     <>
       <SkyDome geometry={skyDomeGeometry} />
+      <SnowParticles />
       <ambientLight intensity={0.08} />
       <hemisphereLight
         args={['#bfd0df', '#342821', 0.7]}
@@ -514,49 +514,49 @@ function TerrainWorld({
         shadow-mapSize-height={2048}
         shadow-mapSize-width={2048}
       />
-      <mesh
-        geometry={planetBackdropGeometry}
-        position={[-worldOrigin.x, -worldOrigin.y, -worldOrigin.z]}
-        receiveShadow
-      >
-        <meshStandardMaterial color="#544c45" roughness={1} />
-      </mesh>
-      <mesh
-        position={[-worldOrigin.x, -worldOrigin.y, -worldOrigin.z]}
-        receiveShadow
-      >
-        <sphereGeometry args={[PLANET_RADIUS - 24, 48, 28]} />
-        <meshStandardMaterial color="#0e151c" roughness={1} />
-      </mesh>
-      {Object.values(terrainChunks).map((terrainChunk) => (
-        <mesh
-          geometry={terrainChunk.geometry}
-          key={terrainChunk.key}
-          material={terrainMaterial ?? undefined}
-          position={[
-            terrainChunk.buildOrigin[0] - worldOrigin.x,
-            terrainChunk.buildOrigin[1] - worldOrigin.y,
-            terrainChunk.buildOrigin[2] - worldOrigin.z,
-          ]}
-          receiveShadow
-        >
-          {terrainMaterial ? null : (
-            <meshStandardMaterial
-              color="#616971"
-              metalness={0.02}
-              roughness={0.95}
-            />
-          )}
+      <WorldOriginAnchor originRef={worldOriginRef}>
+        <mesh geometry={planetBackdropGeometry} receiveShadow>
+          <meshStandardMaterial color="#544c45" roughness={1} />
         </mesh>
-      ))}
-      <FloatingOriginTracker
-        cameraFocusWorld={cameraFocusWorld}
-        cameraMode={cameraMode}
-        onCameraFocusWorldChange={setCameraFocusWorld}
-        onWorldOriginChange={setWorldOrigin}
-        worldOrigin={worldOrigin}
-      />
-      {cameraMode === 'fly' ? <FlyCamera /> : <OrbitCamera />}
+        <mesh receiveShadow>
+          <sphereGeometry args={[PLANET_RADIUS - 24, 48, 28]} />
+          <meshStandardMaterial color="#0e151c" roughness={1} />
+        </mesh>
+        {Object.values(terrainChunks).map((terrainChunk) => (
+          <mesh
+            geometry={terrainChunk.geometry}
+            key={terrainChunk.key}
+            material={terrainMaterial ?? undefined}
+            position={terrainChunk.buildOrigin}
+            receiveShadow
+          >
+            {terrainMaterial ? null : (
+              <meshStandardMaterial
+                color="#616971"
+                metalness={0.02}
+                roughness={0.95}
+              />
+            )}
+          </mesh>
+        ))}
+      </WorldOriginAnchor>
+      {cameraMode === 'orbit' ? (
+        <>
+          <FloatingOriginTracker
+            cameraFocusWorld={cameraFocusWorld}
+            onCameraFocusWorldChange={setCameraFocusWorld}
+          />
+          <OrbitCamera />
+        </>
+      ) : (
+        <FlyCameraController
+          focusRefreshDistance={FOCUS_REFRESH_DISTANCE}
+          initialState={INITIAL_FLY_CAMERA_STATE}
+          onCameraFocusWorldChange={setCameraFocusWorld}
+          onWorldOriginSnapshotChange={setWorldOriginSnapshot}
+          worldOriginRef={worldOriginRef}
+        />
+      )}
       {isSceneReady ? null : (
         <mesh position={[0, PLANET_RADIUS * 0.45, 0]}>
           <sphereGeometry args={[42, 20, 12]} />
@@ -569,35 +569,18 @@ function TerrainWorld({
 
 function FloatingOriginTracker({
   cameraFocusWorld,
-  cameraMode,
   onCameraFocusWorldChange,
-  onWorldOriginChange,
-  worldOrigin,
 }: {
   cameraFocusWorld: Vec3Like
-  cameraMode: CameraMode
   onCameraFocusWorldChange: (cameraFocusWorld: Vec3Like) => void
-  onWorldOriginChange: (worldOrigin: Vec3Like) => void
-  worldOrigin: Vec3Like
 }) {
   const camera = useThree((state) => state.camera)
 
   useFrame(() => {
-    let nextWorldCameraPosition = {
-      x: worldOrigin.x + camera.position.x,
-      y: worldOrigin.y + camera.position.y,
-      z: worldOrigin.z + camera.position.z,
-    }
-
-    if (
-      cameraMode === 'fly' &&
-      camera.position.length() >= FLOATING_ORIGIN_SHIFT_DISTANCE
-    ) {
-      onWorldOriginChange(nextWorldCameraPosition)
-      camera.position.set(0, 0, 0)
-      nextWorldCameraPosition = {
-        ...nextWorldCameraPosition,
-      }
+    const nextWorldCameraPosition = {
+      x: camera.position.x,
+      y: camera.position.y,
+      z: camera.position.z,
     }
 
     if (
@@ -609,6 +592,24 @@ function FloatingOriginTracker({
   })
 
   return null
+}
+
+function WorldOriginAnchor({
+  children,
+  originRef,
+}: {
+  children: ReactNode
+  originRef: MutableRefObject<Vec3Like>
+}) {
+  const groupRef = useRef<Group>(null)
+
+  useFrame(() => {
+    const origin = originRef.current
+
+    groupRef.current?.position.set(-origin.x, -origin.y, -origin.z)
+  })
+
+  return <group ref={groupRef}>{children}</group>
 }
 
 function SkyDome({
@@ -668,85 +669,6 @@ function OrbitCamera() {
   return null
 }
 
-function FlyCamera() {
-  const camera = useThree((state) => state.camera)
-  const gl = useThree((state) => state.gl)
-  const keyState = useRef<Record<string, boolean>>({})
-
-  const controls = useMemo(() => {
-    const nextControls = new PointerLockControls(camera, gl.domElement)
-    nextControls.pointerSpeed = 0.72
-    nextControls.minPolarAngle = Math.PI * 0.04
-    nextControls.maxPolarAngle = Math.PI * 0.96
-
-    return nextControls
-  }, [camera, gl.domElement])
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      keyState.current[event.code] = true
-    }
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      keyState.current[event.code] = false
-    }
-
-    const handleCanvasClick = () => {
-      if (!controls.isLocked) {
-        controls.lock()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-    gl.domElement.addEventListener('click', handleCanvasClick)
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
-      gl.domElement.removeEventListener('click', handleCanvasClick)
-
-      if (controls.isLocked) {
-        controls.unlock()
-      }
-
-      controls.dispose()
-    }
-  }, [controls, gl.domElement])
-
-  useFrame((_, delta) => {
-    const isBoosting = keyState.current.ShiftLeft || keyState.current.ShiftRight
-    const moveSpeed = (isBoosting ? 42 : 18) * delta
-    const verticalSpeed = (isBoosting ? 36 : 14) * delta
-
-    if (keyState.current.KeyW) {
-      controls.moveForward(moveSpeed)
-    }
-
-    if (keyState.current.KeyS) {
-      controls.moveForward(-moveSpeed)
-    }
-
-    if (keyState.current.KeyA) {
-      controls.moveRight(-moveSpeed)
-    }
-
-    if (keyState.current.KeyD) {
-      controls.moveRight(moveSpeed)
-    }
-
-    if (keyState.current.KeyE) {
-      camera.position.setY(camera.position.y + verticalSpeed)
-    }
-
-    if (keyState.current.KeyQ) {
-      camera.position.setY(camera.position.y - verticalSpeed)
-    }
-  })
-
-  return null
-}
-
 function edgeMorphEquals(
   left: TerrainChunkEdgeMorph,
   right: TerrainChunkEdgeMorph
@@ -768,11 +690,18 @@ function getChunkRequestSignature(
 
 function getModeSetup(cameraMode: CameraMode) {
   if (cameraMode === 'fly') {
+    const up = normalizeVec3(INITIAL_FLY_CAMERA_STATE.position)
+
     return {
-      cameraFocusWorld: INITIAL_FLY_WORLD_ORIGIN,
+      cameraFocusWorld: INITIAL_FLY_CAMERA_STATE.position,
       localCameraPosition: [0, 0, 0] as const,
-      localLookAt: [64, -10, 84] as const,
-      worldOrigin: INITIAL_FLY_WORLD_ORIGIN,
+      localLookAt: [
+        INITIAL_FLY_CAMERA_STATE.forward.x,
+        INITIAL_FLY_CAMERA_STATE.forward.y,
+        INITIAL_FLY_CAMERA_STATE.forward.z,
+      ] as const,
+      localUp: [up.x, up.y, up.z] as const,
+      worldOrigin: INITIAL_FLY_CAMERA_STATE.position,
     }
   }
 
@@ -784,7 +713,35 @@ function getModeSetup(cameraMode: CameraMode) {
     },
     localCameraPosition: INITIAL_ORBIT_CAMERA_POSITION,
     localLookAt: [0, 0, 0] as const,
-    worldOrigin: { x: 0, y: 0, z: 0 },
+    localUp: [0, 1, 0] as const,
+    worldOrigin: ZERO_VECTOR,
+  }
+}
+
+function applyCameraSetup(
+  camera: Camera,
+  setup: ReturnType<typeof getModeSetup>
+) {
+  camera.position.set(
+    setup.localCameraPosition[0],
+    setup.localCameraPosition[1],
+    setup.localCameraPosition[2]
+  )
+  camera.up.set(setup.localUp[0], setup.localUp[1], setup.localUp[2])
+  camera.lookAt(
+    setup.localLookAt[0],
+    setup.localLookAt[1],
+    setup.localLookAt[2]
+  )
+}
+
+function normalizeVec3(vector: Vec3Like) {
+  const length = Math.hypot(vector.x, vector.y, vector.z) || 1
+
+  return {
+    x: vector.x / length,
+    y: vector.y / length,
+    z: vector.z / length,
   }
 }
 

@@ -107,8 +107,8 @@ function HomePage() {
         >
           <p className="font-body text-center text-[11px] text-[#eef2f6]/82 sm:text-xs">
             {cameraMode === 'fly'
-              ? 'Fly. Click scene. WASD move. Q E up down. Shift fast. Esc unlock.'
-              : 'Inspect. Drag to orbit. Scroll to zoom. Use Fly for ground view.'}
+              ? 'Fly. Click scene. Mouse look. WASD move. Q and E rise and fall. Shift boost. Esc unlock.'
+              : 'Inspect. Drag to orbit. Scroll to zoom. Use Fly for a close pass.'}
           </p>
         </motion.div>
       </div>

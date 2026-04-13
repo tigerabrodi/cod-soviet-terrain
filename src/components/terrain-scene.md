@@ -1,6 +1,6 @@
 # Terrain Scene
 
-This component is the bridge between the pure terrain systems and the live WebGPU scene.
+This component is the live bridge between the pure terrain systems and the running WebGPU scene.
 
 ## What it owns
 
@@ -9,15 +9,16 @@ This component is the bridge between the pure terrain systems and the live WebGP
 - Worker pool lifetime.
 - Planet chunk diffing and chunk request priority.
 - Inspect mode and fly mode.
-- Floating origin updates.
-- Small debug helpers used during development.
+- Snow and sky scene integration.
+- Floating origin display offset.
+- Small browser debug helpers.
 
 ## Why it is structured this way
 
-- The pure terrain math stays in `src/lib/terrain`. That makes the hard logic testable with Vitest.
-- The scene layer only handles integration work. Camera state. Mesh lifetime. Material binding. Runtime debug checks.
-- Loaded chunks keep the origin they were built with. That lets the floating origin move without instantly invalidating every mesh already on screen.
-- A low detail continuous underlay shell sits below the streamed chunks. This hides small seam gaps when looking at the whole planet from far away.
+- The hard terrain math stays in `src/lib/terrain`. That keeps the generator. quadtree. and chunk logic testable with Vitest.
+- The fly controller math lives in `src/lib/camera`. That keeps camera feel work separate from terrain streaming.
+- The scene layer only handles integration. loading. mesh lifetime. camera hookup. and runtime checks.
+- The world render offset lives in a single group. That lets the fly camera move without forcing every terrain mesh prop to be recomputed through React on every frame.
 
 ## Camera modes
 
@@ -25,16 +26,17 @@ This component is the bridge between the pure terrain systems and the live WebGP
 
 - Starts outside the planet.
 - Uses orbit controls.
-- Best for checking whole planet shape and LOD transitions.
+- Best for checking the whole planet. chunk coverage. and LOD transitions.
 
 `Fly`.
 
-- Starts near the surface.
-- Uses pointer lock controls.
-- Best for ground scale and streaming feel.
+- Starts just above the terrain shell.
+- Uses pointer lock mouse look and six axis movement.
+- Keeps a terrain clearance floor so the camera does not drop under the surface.
+- Best for close terrain passes and checking scale.
 
 ## Runtime debug hook
 
-`window.__terrainDebug` is intentionally small and temporary feeling.
+`window.__terrainDebug` is intentionally small.
 
-It exists so we can verify chunk count and SharedArrayBuffer usage in a real browser session without guessing from code alone.
+It exists so we can verify chunk count. SharedArrayBuffer usage. current camera mode. and the last streamed world focus point in a real browser session.
