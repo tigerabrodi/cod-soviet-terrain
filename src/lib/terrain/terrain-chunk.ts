@@ -9,6 +9,7 @@ export interface TerrainChunkBuildOptions {
   offsetZ?: number
   resolution?: number
   size?: number
+  skirtDepth?: number
 }
 
 export interface TerrainChunkStats {
@@ -90,14 +91,17 @@ export function generateTerrainChunkBuffers(
 ): TerrainChunkBuffers {
   const offsetX = options.offsetX ?? 0
   const offsetZ = options.offsetZ ?? 0
+  const skirtDepth = options.skirtDepth ?? 0
   const size = options.size ?? DEFAULT_TERRAIN_CHUNK_SIZE
   const resolution = options.resolution ?? DEFAULT_TERRAIN_CHUNK_RESOLUTION
-  const vertexCount = (resolution + 1) * (resolution + 1)
+  const baseVertexCount = (resolution + 1) * (resolution + 1)
+  const skirtVertexCount = skirtDepth > 0 ? 8 * (resolution + 1) : 0
+  const vertexCount = baseVertexCount + skirtVertexCount
   const halfSize = size * 0.5
   const positions = new Float32Array(vertexCount * 3)
   const normals = new Float32Array(vertexCount * 3)
   const splatWeights = new Float32Array(vertexCount * 4)
-  const indices = createTerrainChunkIndices(vertexCount, resolution)
+  let skirtRibbons: Array<TerrainChunkSkirtRibbon> = []
 
   let minHeight = Number.POSITIVE_INFINITY
   let maxHeight = Number.NEGATIVE_INFINITY
@@ -123,6 +127,21 @@ export function generateTerrainChunkBuffers(
     }
   }
 
+  if (skirtDepth > 0) {
+    skirtRibbons = appendTerrainChunkSkirts(
+      positions,
+      baseVertexCount,
+      resolution,
+      skirtDepth
+    )
+  }
+
+  const indices = createTerrainChunkIndices(
+    vertexCount,
+    resolution,
+    skirtRibbons
+  )
+
   accumulateTerrainChunkNormals(positions, indices, normals)
 
   for (let index = 0; index < vertexCount; index += 1) {
@@ -144,7 +163,7 @@ export function generateTerrainChunkBuffers(
     positions,
     splatWeights,
     stats: {
-      averageHeight: heightTotal / vertexCount,
+      averageHeight: heightTotal / baseVertexCount,
       maxHeight,
       minHeight,
       resolution,
@@ -209,8 +228,80 @@ export function computeSplatWeights(
   ])
 }
 
-function createTerrainChunkIndices(vertexCount: number, resolution: number) {
-  const indexCount = resolution * resolution * 6
+interface TerrainChunkSkirtRibbon {
+  bottom: Array<number>
+  top: Array<number>
+}
+
+function appendTerrainChunkSkirts(
+  positions: Float32Array,
+  baseVertexCount: number,
+  resolution: number,
+  skirtDepth: number
+) {
+  const skirtRibbons: Array<TerrainChunkSkirtRibbon> = []
+  let vertexIndex = baseVertexCount
+
+  for (const sourceIndices of getTerrainChunkSkirtSourceIndices(resolution)) {
+    const ribbon: TerrainChunkSkirtRibbon = {
+      bottom: [],
+      top: [],
+    }
+
+    for (const sourceIndex of sourceIndices) {
+      const sourceOffset = sourceIndex * 3
+      const topVertexIndex = vertexIndex
+      const topOffset = topVertexIndex * 3
+
+      positions[topOffset] = positions[sourceOffset]
+      positions[topOffset + 1] = positions[sourceOffset + 1]
+      positions[topOffset + 2] = positions[sourceOffset + 2]
+      ribbon.top.push(topVertexIndex)
+      vertexIndex += 1
+
+      const bottomVertexIndex = vertexIndex
+      const bottomOffset = bottomVertexIndex * 3
+
+      positions[bottomOffset] = positions[sourceOffset]
+      positions[bottomOffset + 1] = positions[sourceOffset + 1] - skirtDepth
+      positions[bottomOffset + 2] = positions[sourceOffset + 2]
+      ribbon.bottom.push(bottomVertexIndex)
+      vertexIndex += 1
+    }
+
+    skirtRibbons.push(ribbon)
+  }
+
+  return skirtRibbons
+}
+
+function getTerrainChunkSkirtSourceIndices(resolution: number) {
+  const edgeLength = resolution + 1
+
+  return [
+    Array.from({ length: edgeLength }, (_, index) => index),
+    Array.from(
+      { length: edgeLength },
+      (_, index) => index * edgeLength + resolution
+    ),
+    Array.from(
+      { length: edgeLength },
+      (_, index) => resolution * edgeLength + (resolution - index)
+    ),
+    Array.from(
+      { length: edgeLength },
+      (_, index) => (resolution - index) * edgeLength
+    ),
+  ]
+}
+
+function createTerrainChunkIndices(
+  vertexCount: number,
+  resolution: number,
+  skirtRibbons: Array<TerrainChunkSkirtRibbon> = []
+) {
+  const indexCount =
+    resolution * resolution * 6 + skirtRibbons.length * resolution * 6
   const indices =
     vertexCount > 65535
       ? new Uint32Array(indexCount)
@@ -231,6 +322,23 @@ function createTerrainChunkIndices(vertexCount: number, resolution: number) {
       indices[indexOffset + 3] = topRight
       indices[indexOffset + 4] = bottomLeft
       indices[indexOffset + 5] = bottomRight
+      indexOffset += 6
+    }
+  }
+
+  for (const ribbon of skirtRibbons) {
+    for (let segmentIndex = 0; segmentIndex < resolution; segmentIndex += 1) {
+      const topLeft = ribbon.top[segmentIndex]
+      const topRight = ribbon.top[segmentIndex + 1]
+      const bottomLeft = ribbon.bottom[segmentIndex]
+      const bottomRight = ribbon.bottom[segmentIndex + 1]
+
+      indices[indexOffset] = topLeft
+      indices[indexOffset + 1] = topRight
+      indices[indexOffset + 2] = bottomLeft
+      indices[indexOffset + 3] = topRight
+      indices[indexOffset + 4] = bottomRight
+      indices[indexOffset + 5] = bottomLeft
       indexOffset += 6
     }
   }

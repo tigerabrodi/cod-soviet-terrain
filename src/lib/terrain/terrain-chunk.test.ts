@@ -68,6 +68,27 @@ describe('buildTerrainChunk', () => {
     }
   })
 
+  it('adds edge skirts when requested to hide lod cracks', () => {
+    const chunkBuffers = generateTerrainChunkBuffers({
+      resolution: 4,
+      size: 32,
+      skirtDepth: 6,
+    })
+    const geometry = createTerrainChunkGeometry(chunkBuffers)
+
+    try {
+      expect(chunkBuffers.positions.length).toBe(65 * 3)
+      expect(chunkBuffers.normals.length).toBe(65 * 3)
+      expect(chunkBuffers.splatWeights.length).toBe(65 * 4)
+      expect(chunkBuffers.indices.length).toBe(192)
+
+      expect(geometry.getAttribute('position').count).toBe(65)
+      expect(geometry.index?.count).toBe(192)
+    } finally {
+      geometry.dispose()
+    }
+  })
+
   it('builds a chunk with expected geometry and terrain stats', () => {
     const { geometry, stats } = buildTerrainChunk({ resolution: 8, size: 32 })
 

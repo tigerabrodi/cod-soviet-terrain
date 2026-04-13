@@ -47,10 +47,11 @@ interface TerrainChunkRuntime extends TerrainChunkDescriptor {
 
 const INITIAL_FLY_CAMERA_POSITION = [10, 9, 20] as const
 const INITIAL_ORBIT_CAMERA_POSITION = [96, 48, 96] as const
+const TERRAIN_CHUNK_SKIRT_DEPTH = 18
 const TERRAIN_LOD_RESOLUTIONS = [
   DEFAULT_TERRAIN_CHUNK_RESOLUTION,
-  DEFAULT_TERRAIN_CHUNK_RESOLUTION,
-  DEFAULT_TERRAIN_CHUNK_RESOLUTION,
+  32,
+  16,
 ] as const
 const TERRAIN_STREAM_RADIUS = TERRAIN_LOD_RESOLUTIONS.length - 1
 
@@ -272,6 +273,7 @@ function TerrainWorld({
           offsetZ: terrainChunk.worldZ,
           resolution: terrainChunk.resolution,
           size: DEFAULT_TERRAIN_CHUNK_SIZE,
+          skirtDepth: TERRAIN_CHUNK_SKIRT_DEPTH,
         })
         .then((chunkBuffers) => {
           inflightChunkLookupRef.current.delete(terrainChunk.key)
