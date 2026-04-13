@@ -1,7 +1,13 @@
-import { TerrainScene, type CameraMode } from '@/components/terrain-scene'
+import type { CameraMode } from '@/components/terrain-scene'
 import { createFileRoute } from '@tanstack/react-router'
 import { motion } from 'motion/react'
-import { startTransition, useState } from 'react'
+import { Suspense, lazy, startTransition, useState } from 'react'
+
+const TerrainScene = lazy(() =>
+  import('@/components/terrain-scene').then((module) => ({
+    default: module.TerrainScene,
+  }))
+)
 
 export const Route = createFileRoute('/')({
   component: HomePage,
@@ -15,19 +21,21 @@ function HomePage() {
   return (
     <div className="relative h-dvh overflow-hidden bg-[#090d12] text-[#edf2f7]">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(156,186,214,0.18),_transparent_40%),linear-gradient(180deg,_rgba(9,13,18,0.28),_rgba(4,7,10,0.94))]" />
-      <TerrainScene
-        cameraMode={cameraMode}
-        onBackendChange={(nextBackend) => {
-          startTransition(() => {
-            setBackend(nextBackend)
-          })
-        }}
-        onReadyChange={(nextReady) => {
-          startTransition(() => {
-            setIsReady(nextReady)
-          })
-        }}
-      />
+      <Suspense fallback={<div className="absolute inset-0 bg-[#081018]" />}>
+        <TerrainScene
+          cameraMode={cameraMode}
+          onBackendChange={(nextBackend) => {
+            startTransition(() => {
+              setBackend(nextBackend)
+            })
+          }}
+          onReadyChange={(nextReady) => {
+            startTransition(() => {
+              setIsReady(nextReady)
+            })
+          }}
+        />
+      </Suspense>
       <div className="pointer-events-none absolute inset-0 p-4 sm:p-6">
         <div className="flex items-start justify-between gap-3">
           <motion.div
@@ -54,7 +62,7 @@ function HomePage() {
               {backend}
             </p>
             <p className="font-body mt-2 text-sm text-[#eef2f6]">
-              {isReady ? 'Textures ready' : 'Loading terrain'}
+              {isReady ? 'World ready' : 'Loading world'}
             </p>
             <div className="mt-3 flex justify-end gap-2">
               <button

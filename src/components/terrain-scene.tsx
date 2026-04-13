@@ -14,13 +14,18 @@ import {
 } from '@/lib/terrain/terrain-planet'
 import { loadTerrainTextureSet } from '@/lib/terrain/terrain-textures'
 import { TerrainChunkWorkerPool } from '@/lib/terrain/terrain-worker-pool'
+import { createSkyDomeGeometry } from '@/lib/sky/sky-dome'
+import { loadSkyEnvironment } from '@/lib/sky/sky-environment'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { SphereGeometry } from 'three'
+import { Euler, SphereGeometry, type Mesh } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js'
 import {
   ACESFilmicToneMapping,
+  BackSide,
+  Color,
+  FogExp2,
   PCFSoftShadowMap,
   SRGBColorSpace,
   WebGPURenderer,
@@ -87,7 +92,6 @@ export function TerrainScene({
       shadows
     >
       <color attach="background" args={['#081018']} />
-      <fog attach="fog" args={['#8ea0b4', 640, 2200]} />
       <TerrainWorld
         cameraMode={cameraMode}
         onBackendChange={onBackendChange}
@@ -122,8 +126,10 @@ function TerrainWorld({
 }: TerrainSceneProps) {
   const camera = useThree((state) => state.camera)
   const gl = useThree((state) => state.gl)
+  const getThreeState = useThree((state) => state.get)
 
   const [isMaterialReady, setIsMaterialReady] = useState(false)
+  const [isSkyReady, setIsSkyReady] = useState(false)
   const [terrainChunks, setTerrainChunks] = useState<
     Record<string, TerrainChunkRuntime>
   >({})
@@ -136,6 +142,7 @@ function TerrainWorld({
   const [cameraFocusWorld, setCameraFocusWorld] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).cameraFocusWorld
   )
+  const skyDomeGeometry = useMemo(() => createSkyDomeGeometry(), [])
   const planetBackdropGeometry = useMemo(
     () => createPlanetBackdropGeometry(),
     []
@@ -171,7 +178,7 @@ function TerrainWorld({
       edgeMorphEquals(activeChunk.edgeMorph, desiredEdgeMorph)
     )
   })
-  const isSceneReady = isMaterialReady && isTerrainWindowReady
+  const isSceneReady = isMaterialReady && isSkyReady && isTerrainWindowReady
 
   useEffect(() => {
     const setup = getModeSetup(cameraMode)
@@ -229,6 +236,58 @@ function TerrainWorld({
       isMounted = false
     }
   }, [gl])
+
+  useEffect(() => {
+    let isMounted = true
+    const currentScene = getThreeState().scene
+    const previousBackground = currentScene.background
+    const previousEnvironment = currentScene.environment
+    const previousFog = currentScene.fog
+    const previousBackgroundIntensity = currentScene.backgroundIntensity
+    const previousBackgroundBlurriness = currentScene.backgroundBlurriness
+    const previousEnvironmentIntensity = currentScene.environmentIntensity
+    const previousEnvironmentRotation = currentScene.environmentRotation.clone()
+
+    currentScene.background = new Color('#8a9298')
+    currentScene.backgroundIntensity = 1
+    currentScene.backgroundBlurriness = 0
+    currentScene.environmentIntensity = 0.6
+    currentScene.fog = new FogExp2('#95a1ab', 0.00048)
+
+    loadSkyEnvironment(
+      gl as unknown as Parameters<typeof loadSkyEnvironment>[0]
+    )
+      .then((skyEnvironment) => {
+        if (!isMounted) {
+          return
+        }
+
+        currentScene.background = new Color('#8a9298')
+        currentScene.backgroundIntensity = 1
+        currentScene.backgroundBlurriness = 0
+        currentScene.environment = skyEnvironment.environment
+        currentScene.environmentIntensity = 0.78
+        currentScene.environmentRotation.copy(
+          new Euler(-0.24, Math.PI * 0.58, 0)
+        )
+        currentScene.fog = new FogExp2('#95a1ab', 0.00048)
+        setIsSkyReady(true)
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to load sky environment.', error)
+      })
+
+    return () => {
+      isMounted = false
+      currentScene.background = previousBackground
+      currentScene.environment = previousEnvironment
+      currentScene.fog = previousFog
+      currentScene.backgroundIntensity = previousBackgroundIntensity
+      currentScene.backgroundBlurriness = previousBackgroundBlurriness
+      currentScene.environmentIntensity = previousEnvironmentIntensity
+      currentScene.environmentRotation.copy(previousEnvironmentRotation)
+    }
+  }, [getThreeState, gl])
 
   useEffect(() => {
     terrainChunksRef.current = terrainChunks
@@ -432,23 +491,25 @@ function TerrainWorld({
 
   useEffect(() => {
     return () => {
+      skyDomeGeometry.dispose()
       planetBackdropGeometry.dispose()
       terrainMaterial?.dispose()
     }
-  }, [planetBackdropGeometry, terrainMaterial])
+  }, [planetBackdropGeometry, skyDomeGeometry, terrainMaterial])
 
   return (
     <>
-      <ambientLight intensity={0.22} />
+      <SkyDome geometry={skyDomeGeometry} />
+      <ambientLight intensity={0.08} />
       <hemisphereLight
-        args={['#cfdbec', '#1b1411', 1.1]}
-        groundColor="#2b221c"
+        args={['#bfd0df', '#342821', 0.7]}
+        groundColor="#342821"
       />
       <directionalLight
         castShadow
-        color="#ffe1bf"
-        intensity={2.4}
-        position={[520, 860, 340]}
+        color="#ffd7b1"
+        intensity={2.15}
+        position={[-540, 260, 420]}
         shadow-bias={-0.00008}
         shadow-mapSize-height={2048}
         shadow-mapSize-width={2048}
@@ -548,6 +609,30 @@ function FloatingOriginTracker({
   })
 
   return null
+}
+
+function SkyDome({
+  geometry,
+}: {
+  geometry: ReturnType<typeof createSkyDomeGeometry>
+}) {
+  const camera = useThree((state) => state.camera)
+  const meshRef = useRef<Mesh>(null)
+
+  useFrame(() => {
+    meshRef.current?.position.copy(camera.position)
+  })
+
+  return (
+    <mesh frustumCulled={false} geometry={geometry} ref={meshRef}>
+      <meshBasicMaterial
+        fog={false}
+        side={BackSide}
+        toneMapped={false}
+        vertexColors
+      />
+    </mesh>
+  )
 }
 
 function OrbitCamera() {
