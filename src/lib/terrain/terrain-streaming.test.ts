@@ -43,6 +43,37 @@ describe('selectChunkWindow', () => {
       worldZ: -360,
     })
   })
+
+  it('assigns lod levels by chunk ring distance from the anchor', () => {
+    const chunkWindow = selectChunkWindow(
+      { gridX: 0, gridZ: 0 },
+      180,
+      2,
+      [64, 32, 16]
+    )
+
+    expect(chunkWindow).toHaveLength(25)
+    expect(chunkWindow.find((chunk) => chunk.key === '0:0')).toMatchObject({
+      key: '0:0',
+      lodLevel: 0,
+      resolution: 64,
+    })
+    expect(chunkWindow.find((chunk) => chunk.key === '1:0')).toMatchObject({
+      key: '1:0',
+      lodLevel: 1,
+      resolution: 32,
+    })
+    expect(chunkWindow.find((chunk) => chunk.key === '2:0')).toMatchObject({
+      key: '2:0',
+      lodLevel: 2,
+      resolution: 16,
+    })
+    expect(chunkWindow.find((chunk) => chunk.key === '2:2')).toMatchObject({
+      key: '2:2',
+      lodLevel: 2,
+      resolution: 16,
+    })
+  })
 })
 
 describe('shouldRefreshChunkWindow', () => {

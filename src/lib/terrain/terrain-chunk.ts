@@ -1,4 +1,4 @@
-import { Float32BufferAttribute, PlaneGeometry } from 'three'
+import { BufferAttribute, BufferGeometry, Float32BufferAttribute } from 'three'
 import { NoiseGenerator } from './noise'
 
 export const DEFAULT_TERRAIN_CHUNK_SIZE = 180
@@ -19,8 +19,16 @@ export interface TerrainChunkStats {
   size: number
 }
 
+export interface TerrainChunkBuffers {
+  indices: Uint16Array | Uint32Array
+  normals: Float32Array
+  positions: Float32Array
+  splatWeights: Float32Array
+  stats: TerrainChunkStats
+}
+
 export interface TerrainChunkData {
-  geometry: PlaneGeometry
+  geometry: BufferGeometry
   stats: TerrainChunkStats
 }
 
@@ -69,68 +77,102 @@ const craterNoise = new NoiseGenerator({
 export function buildTerrainChunk(
   options: TerrainChunkBuildOptions = {}
 ): TerrainChunkData {
+  const chunkBuffers = generateTerrainChunkBuffers(options)
+
+  return {
+    geometry: createTerrainChunkGeometry(chunkBuffers),
+    stats: chunkBuffers.stats,
+  }
+}
+
+export function generateTerrainChunkBuffers(
+  options: TerrainChunkBuildOptions = {}
+): TerrainChunkBuffers {
   const offsetX = options.offsetX ?? 0
   const offsetZ = options.offsetZ ?? 0
   const size = options.size ?? DEFAULT_TERRAIN_CHUNK_SIZE
   const resolution = options.resolution ?? DEFAULT_TERRAIN_CHUNK_RESOLUTION
-
-  const geometry = new PlaneGeometry(size, size, resolution, resolution)
-  geometry.rotateX(-Math.PI / 2)
-
-  const positions = geometry.getAttribute('position') as Float32BufferAttribute
+  const vertexCount = (resolution + 1) * (resolution + 1)
+  const halfSize = size * 0.5
+  const positions = new Float32Array(vertexCount * 3)
+  const normals = new Float32Array(vertexCount * 3)
+  const splatWeights = new Float32Array(vertexCount * 4)
+  const indices = createTerrainChunkIndices(vertexCount, resolution)
 
   let minHeight = Number.POSITIVE_INFINITY
   let maxHeight = Number.NEGATIVE_INFINITY
   let heightTotal = 0
+  let vertexIndex = 0
 
-  for (let index = 0; index < positions.count; index += 1) {
-    const x = positions.getX(index)
-    const z = positions.getZ(index)
-    const height = sampleTerrainHeight(x + offsetX, z + offsetZ)
+  for (let zIndex = 0; zIndex <= resolution; zIndex += 1) {
+    const z = -halfSize + (zIndex / resolution) * size
 
-    positions.setY(index, height)
-    minHeight = Math.min(minHeight, height)
-    maxHeight = Math.max(maxHeight, height)
-    heightTotal += height
+    for (let xIndex = 0; xIndex <= resolution; xIndex += 1) {
+      const x = -halfSize + (xIndex / resolution) * size
+      const height = sampleTerrainHeight(x + offsetX, z + offsetZ)
+      const positionOffset = vertexIndex * 3
+
+      positions[positionOffset] = x
+      positions[positionOffset + 1] = height
+      positions[positionOffset + 2] = z
+
+      minHeight = Math.min(minHeight, height)
+      maxHeight = Math.max(maxHeight, height)
+      heightTotal += height
+      vertexIndex += 1
+    }
   }
 
-  positions.needsUpdate = true
-  geometry.computeVertexNormals()
+  accumulateTerrainChunkNormals(positions, indices, normals)
 
-  const normals = geometry.getAttribute('normal') as Float32BufferAttribute
-  const splatWeights = new Float32Array(positions.count * 4)
-
-  for (let index = 0; index < positions.count; index += 1) {
-    const height = positions.getY(index)
-    const flatness = clamp(normals.getY(index), 0, 1)
+  for (let index = 0; index < vertexCount; index += 1) {
+    const height = positions[index * 3 + 1]
+    const flatness = clamp(normals[index * 3 + 1], 0, 1)
     const height01 = inverseLerp(minHeight, maxHeight, height)
-
     const weights = computeSplatWeights(height01, flatness)
-    const offset = index * 4
+    const splatOffset = index * 4
 
-    splatWeights[offset] = weights[0]
-    splatWeights[offset + 1] = weights[1]
-    splatWeights[offset + 2] = weights[2]
-    splatWeights[offset + 3] = weights[3]
+    splatWeights[splatOffset] = weights[0]
+    splatWeights[splatOffset + 1] = weights[1]
+    splatWeights[splatOffset + 2] = weights[2]
+    splatWeights[splatOffset + 3] = weights[3]
   }
-
-  geometry.setAttribute(
-    'splatWeights',
-    new Float32BufferAttribute(splatWeights, 4)
-  )
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
 
   return {
-    geometry,
+    indices,
+    normals,
+    positions,
+    splatWeights,
     stats: {
-      averageHeight: heightTotal / positions.count,
+      averageHeight: heightTotal / vertexCount,
       maxHeight,
       minHeight,
       resolution,
       size,
     },
   }
+}
+
+export function createTerrainChunkGeometry(chunkBuffers: TerrainChunkBuffers) {
+  const geometry = new BufferGeometry()
+
+  geometry.setAttribute(
+    'position',
+    new Float32BufferAttribute(chunkBuffers.positions, 3)
+  )
+  geometry.setAttribute(
+    'normal',
+    new Float32BufferAttribute(chunkBuffers.normals, 3)
+  )
+  geometry.setAttribute(
+    'splatWeights',
+    new Float32BufferAttribute(chunkBuffers.splatWeights, 4)
+  )
+  geometry.setIndex(new BufferAttribute(chunkBuffers.indices, 1))
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+
+  return geometry
 }
 
 export function sampleTerrainHeight(x: number, z: number) {
@@ -165,6 +207,96 @@ export function computeSplatWeights(
     frostWeight,
     rockWeight,
   ])
+}
+
+function createTerrainChunkIndices(vertexCount: number, resolution: number) {
+  const indexCount = resolution * resolution * 6
+  const indices =
+    vertexCount > 65535
+      ? new Uint32Array(indexCount)
+      : new Uint16Array(indexCount)
+
+  let indexOffset = 0
+
+  for (let zIndex = 0; zIndex < resolution; zIndex += 1) {
+    for (let xIndex = 0; xIndex < resolution; xIndex += 1) {
+      const topLeft = zIndex * (resolution + 1) + xIndex
+      const topRight = topLeft + 1
+      const bottomLeft = (zIndex + 1) * (resolution + 1) + xIndex
+      const bottomRight = bottomLeft + 1
+
+      indices[indexOffset] = topLeft
+      indices[indexOffset + 1] = bottomLeft
+      indices[indexOffset + 2] = topRight
+      indices[indexOffset + 3] = topRight
+      indices[indexOffset + 4] = bottomLeft
+      indices[indexOffset + 5] = bottomRight
+      indexOffset += 6
+    }
+  }
+
+  return indices
+}
+
+function accumulateTerrainChunkNormals(
+  positions: Float32Array,
+  indices: Uint16Array | Uint32Array,
+  normals: Float32Array
+) {
+  for (let index = 0; index < indices.length; index += 3) {
+    const a = indices[index]
+    const b = indices[index + 1]
+    const c = indices[index + 2]
+
+    const ax = positions[a * 3]
+    const ay = positions[a * 3 + 1]
+    const az = positions[a * 3 + 2]
+    const bx = positions[b * 3]
+    const by = positions[b * 3 + 1]
+    const bz = positions[b * 3 + 2]
+    const cx = positions[c * 3]
+    const cy = positions[c * 3 + 1]
+    const cz = positions[c * 3 + 2]
+
+    const abx = bx - ax
+    const aby = by - ay
+    const abz = bz - az
+    const acx = cx - ax
+    const acy = cy - ay
+    const acz = cz - az
+
+    const nx = aby * acz - abz * acy
+    const ny = abz * acx - abx * acz
+    const nz = abx * acy - aby * acx
+
+    normals[a * 3] += nx
+    normals[a * 3 + 1] += ny
+    normals[a * 3 + 2] += nz
+    normals[b * 3] += nx
+    normals[b * 3 + 1] += ny
+    normals[b * 3 + 2] += nz
+    normals[c * 3] += nx
+    normals[c * 3 + 1] += ny
+    normals[c * 3 + 2] += nz
+  }
+
+  for (let index = 0; index < normals.length; index += 3) {
+    const nx = normals[index]
+    const ny = normals[index + 1]
+    const nz = normals[index + 2]
+    const length = Math.hypot(nx, ny, nz)
+
+    if (length <= Number.EPSILON) {
+      normals[index] = 0
+      normals[index + 1] = 1
+      normals[index + 2] = 0
+      continue
+    }
+
+    normals[index] = nx / length
+    normals[index + 1] = ny / length
+    normals[index + 2] = nz / length
+  }
 }
 
 function normalizeWeights(

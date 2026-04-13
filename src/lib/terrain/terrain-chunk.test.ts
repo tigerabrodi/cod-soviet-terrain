@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildTerrainChunk,
   computeSplatWeights,
+  createTerrainChunkGeometry,
+  generateTerrainChunkBuffers,
   sampleTerrainHeight,
 } from './terrain-chunk'
 
@@ -44,6 +46,28 @@ describe('sampleTerrainHeight', () => {
 })
 
 describe('buildTerrainChunk', () => {
+  it('creates transferable terrain buffers for worker generation', () => {
+    const chunkBuffers = generateTerrainChunkBuffers({
+      resolution: 8,
+      size: 32,
+    })
+    const geometry = createTerrainChunkGeometry(chunkBuffers)
+
+    try {
+      expect(chunkBuffers.positions.length).toBe(81 * 3)
+      expect(chunkBuffers.normals.length).toBe(81 * 3)
+      expect(chunkBuffers.splatWeights.length).toBe(81 * 4)
+      expect(chunkBuffers.indices.length).toBe(384)
+
+      expect(geometry.getAttribute('position').count).toBe(81)
+      expect(geometry.getAttribute('normal').count).toBe(81)
+      expect(geometry.getAttribute('splatWeights').count).toBe(81)
+      expect(geometry.index?.count).toBe(384)
+    } finally {
+      geometry.dispose()
+    }
+  })
+
   it('builds a chunk with expected geometry and terrain stats', () => {
     const { geometry, stats } = buildTerrainChunk({ resolution: 8, size: 32 })
 

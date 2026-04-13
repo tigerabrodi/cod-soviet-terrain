@@ -1,7 +1,8 @@
 import {
-  buildTerrainChunk,
+  createTerrainChunkGeometry,
   DEFAULT_TERRAIN_CHUNK_RESOLUTION,
   DEFAULT_TERRAIN_CHUNK_SIZE,
+  type TerrainChunkStats,
 } from '@/lib/terrain/terrain-chunk'
 import { createTerrainMaterial } from '@/lib/terrain/terrain-material'
 import {
@@ -9,8 +10,10 @@ import {
   selectChunkWindow,
   shouldRefreshChunkWindow,
   type TerrainChunkAnchor,
+  type TerrainChunkDescriptor,
 } from '@/lib/terrain/terrain-streaming'
 import { loadTerrainTextureSet } from '@/lib/terrain/terrain-textures'
+import { TerrainChunkWorkerPool } from '@/lib/terrain/terrain-worker-pool'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
@@ -37,7 +40,19 @@ export interface TerrainSceneProps {
 
 export type CameraMode = 'fly' | 'orbit'
 
-const TERRAIN_STREAM_RADIUS = 1
+interface TerrainChunkRuntime extends TerrainChunkDescriptor {
+  geometry: ReturnType<typeof createTerrainChunkGeometry>
+  stats: TerrainChunkStats
+}
+
+const INITIAL_FLY_CAMERA_POSITION = [10, 9, 20] as const
+const INITIAL_ORBIT_CAMERA_POSITION = [96, 48, 96] as const
+const TERRAIN_LOD_RESOLUTIONS = [
+  DEFAULT_TERRAIN_CHUNK_RESOLUTION,
+  DEFAULT_TERRAIN_CHUNK_RESOLUTION,
+  DEFAULT_TERRAIN_CHUNK_RESOLUTION,
+] as const
+const TERRAIN_STREAM_RADIUS = TERRAIN_LOD_RESOLUTIONS.length - 1
 
 export function TerrainScene({
   cameraMode,
@@ -46,7 +61,12 @@ export function TerrainScene({
 }: TerrainSceneProps) {
   return (
     <Canvas
-      camera={{ far: 900, fov: 42, near: 0.1, position: [96, 48, 96] }}
+      camera={{
+        far: 900,
+        fov: 42,
+        near: 0.1,
+        position: [...INITIAL_ORBIT_CAMERA_POSITION],
+      }}
       className="absolute inset-0 h-full w-full"
       dpr={[1, 2]}
       gl={createTerrainRenderer}
@@ -89,28 +109,39 @@ function TerrainWorld({
 
   const [isMaterialReady, setIsMaterialReady] = useState(false)
   const [chunkAnchor, setChunkAnchor] = useState<TerrainChunkAnchor>(() =>
-    getChunkAnchor(0, 0, DEFAULT_TERRAIN_CHUNK_SIZE)
+    getChunkAnchor(
+      INITIAL_ORBIT_CAMERA_POSITION[0],
+      INITIAL_ORBIT_CAMERA_POSITION[2],
+      DEFAULT_TERRAIN_CHUNK_SIZE
+    )
   )
+  const [terrainChunks, setTerrainChunks] = useState<
+    Record<string, TerrainChunkRuntime>
+  >({})
   const [terrainMaterial, setTerrainMaterial] = useState<ReturnType<
     typeof createTerrainMaterial
   > | null>(null)
-  const terrainChunks = useMemo(
+  const desiredChunkDescriptors = useMemo(
     () =>
       selectChunkWindow(
         chunkAnchor,
         DEFAULT_TERRAIN_CHUNK_SIZE,
-        TERRAIN_STREAM_RADIUS
-      ).map((terrainChunk) => ({
-        ...terrainChunk,
-        data: buildTerrainChunk({
-          offsetX: terrainChunk.worldX,
-          offsetZ: terrainChunk.worldZ,
-          resolution: DEFAULT_TERRAIN_CHUNK_RESOLUTION,
-          size: DEFAULT_TERRAIN_CHUNK_SIZE,
-        }),
-      })),
+        TERRAIN_STREAM_RADIUS,
+        TERRAIN_LOD_RESOLUTIONS
+      ),
     [chunkAnchor]
   )
+  const desiredChunkLookupRef = useRef(
+    new Map<string, TerrainChunkDescriptor>()
+  )
+  const inflightChunkLookupRef = useRef(new Map<string, number>())
+  const terrainChunksRef = useRef<Record<string, TerrainChunkRuntime>>({})
+  const workerPoolRef = useRef<TerrainChunkWorkerPool | null>(null)
+  const isTerrainWindowReady = desiredChunkDescriptors.every((terrainChunk) => {
+    const loadedChunk = terrainChunks[terrainChunk.key]
+    return loadedChunk?.resolution === terrainChunk.resolution
+  })
+  const isSceneReady = isMaterialReady && isTerrainWindowReady
 
   useEffect(() => {
     const backend =
@@ -135,7 +166,6 @@ function TerrainWorld({
         const nextMaterial = createTerrainMaterial(textures)
         setTerrainMaterial(nextMaterial)
         setIsMaterialReady(true)
-        onReadyChange?.(true)
       })
       .catch((error: unknown) => {
         console.error('Failed to load terrain textures.', error)
@@ -143,17 +173,153 @@ function TerrainWorld({
 
     return () => {
       isMounted = false
-      onReadyChange?.(false)
     }
   }, [gl, onReadyChange])
 
   useEffect(() => {
+    terrainChunksRef.current = terrainChunks
+  }, [terrainChunks])
+
+  useEffect(() => {
+    onReadyChange?.(isSceneReady)
+  }, [isSceneReady, onReadyChange])
+
+  useEffect(() => {
+    const workerPool = new TerrainChunkWorkerPool()
+    workerPoolRef.current = workerPool
+
     return () => {
-      for (const terrainChunk of terrainChunks) {
-        terrainChunk.data.geometry.dispose()
+      workerPoolRef.current = null
+      workerPool.destroy()
+
+      for (const terrainChunk of Object.values(terrainChunksRef.current)) {
+        terrainChunk.geometry.dispose()
       }
     }
-  }, [terrainChunks])
+  }, [])
+
+  useEffect(() => {
+    desiredChunkLookupRef.current = new Map(
+      desiredChunkDescriptors.map((terrainChunk) => [
+        terrainChunk.key,
+        terrainChunk,
+      ])
+    )
+
+    setTerrainChunks((currentTerrainChunks) => {
+      const nextTerrainChunks = { ...currentTerrainChunks }
+
+      for (const terrainChunkKey of Object.keys(nextTerrainChunks)) {
+        if (desiredChunkLookupRef.current.has(terrainChunkKey)) {
+          continue
+        }
+
+        nextTerrainChunks[terrainChunkKey]?.geometry.dispose()
+        delete nextTerrainChunks[terrainChunkKey]
+        inflightChunkLookupRef.current.delete(terrainChunkKey)
+      }
+
+      terrainChunksRef.current = nextTerrainChunks
+      return nextTerrainChunks
+    })
+
+    const workerPool = workerPoolRef.current
+
+    if (!workerPool) {
+      return
+    }
+
+    const prioritizedChunks = [...desiredChunkDescriptors].sort(
+      (left, right) => {
+        if (left.lodLevel !== right.lodLevel) {
+          return left.lodLevel - right.lodLevel
+        }
+
+        if (left.gridDistance !== right.gridDistance) {
+          return left.gridDistance - right.gridDistance
+        }
+
+        if (left.gridZ !== right.gridZ) {
+          return left.gridZ - right.gridZ
+        }
+
+        return left.gridX - right.gridX
+      }
+    )
+
+    for (const terrainChunk of prioritizedChunks) {
+      const loadedChunk = terrainChunksRef.current[terrainChunk.key]
+      const inflightResolution = inflightChunkLookupRef.current.get(
+        terrainChunk.key
+      )
+
+      if (loadedChunk?.resolution === terrainChunk.resolution) {
+        continue
+      }
+
+      if (inflightResolution === terrainChunk.resolution) {
+        continue
+      }
+
+      inflightChunkLookupRef.current.set(
+        terrainChunk.key,
+        terrainChunk.resolution
+      )
+
+      workerPool
+        .requestChunk({
+          offsetX: terrainChunk.worldX,
+          offsetZ: terrainChunk.worldZ,
+          resolution: terrainChunk.resolution,
+          size: DEFAULT_TERRAIN_CHUNK_SIZE,
+        })
+        .then((chunkBuffers) => {
+          inflightChunkLookupRef.current.delete(terrainChunk.key)
+
+          const desiredChunk = desiredChunkLookupRef.current.get(
+            terrainChunk.key
+          )
+
+          if (
+            !desiredChunk ||
+            desiredChunk.resolution !== terrainChunk.resolution
+          ) {
+            return
+          }
+
+          const geometry = createTerrainChunkGeometry(chunkBuffers)
+
+          setTerrainChunks((currentTerrainChunks) => {
+            const activeChunk = currentTerrainChunks[terrainChunk.key]
+
+            if (activeChunk?.resolution === desiredChunk.resolution) {
+              geometry.dispose()
+              return currentTerrainChunks
+            }
+
+            if (activeChunk) {
+              activeChunk.geometry.dispose()
+            }
+
+            const nextTerrainChunks = {
+              ...currentTerrainChunks,
+              [terrainChunk.key]: {
+                ...desiredChunk,
+                geometry,
+                stats: chunkBuffers.stats,
+              },
+            }
+
+            terrainChunksRef.current = nextTerrainChunks
+            return nextTerrainChunks
+          })
+        })
+        .catch((error: unknown) => {
+          inflightChunkLookupRef.current.delete(terrainChunk.key)
+          console.error('Failed to build terrain chunk in worker.', error)
+        })
+    }
+  }, [desiredChunkDescriptors])
 
   useEffect(() => {
     return () => {
@@ -177,9 +343,9 @@ function TerrainWorld({
         shadow-mapSize-height={2048}
         shadow-mapSize-width={2048}
       />
-      {terrainChunks.map((terrainChunk) => (
+      {Object.values(terrainChunks).map((terrainChunk) => (
         <mesh
-          geometry={terrainChunk.data.geometry}
+          geometry={terrainChunk.geometry}
           key={terrainChunk.key}
           position={[terrainChunk.worldX, 0, terrainChunk.worldZ]}
           receiveShadow
@@ -217,7 +383,7 @@ function TerrainWorld({
         onChunkAnchorChange={setChunkAnchor}
       />
       {cameraMode === 'fly' ? <FlyCamera /> : <OrbitCamera />}
-      {isMaterialReady ? null : (
+      {isSceneReady ? null : (
         <mesh position={[0, 26, -46]}>
           <planeGeometry args={[26, 6]} />
           <meshBasicMaterial color="#10161d" opacity={0.35} transparent />
@@ -264,7 +430,7 @@ function OrbitCamera() {
 
   const controls = useMemo(() => {
     const nextControls = new OrbitControls(camera, gl.domElement)
-    camera.position.set(96, 48, 96)
+    camera.position.set(...INITIAL_ORBIT_CAMERA_POSITION)
     camera.lookAt(0, 10, 0)
     nextControls.enableDamping = true
     nextControls.dampingFactor = 0.06
@@ -296,7 +462,7 @@ function FlyCamera() {
   const keyState = useRef<Record<string, boolean>>({})
 
   const controls = useMemo(() => {
-    camera.position.set(10, 9, 20)
+    camera.position.set(...INITIAL_FLY_CAMERA_POSITION)
     camera.lookAt(0, 9, 0)
 
     const nextControls = new PointerLockControls(camera, gl.domElement)
