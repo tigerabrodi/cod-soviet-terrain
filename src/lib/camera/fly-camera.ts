@@ -96,7 +96,7 @@ export function stepFlyCamera(
     up,
     makeStableTangent(up)
   )
-  const right = normalize(crossVec3(up, tangentialForward))
+  const right = normalize(crossVec3(tangentialForward, up))
   const movementDirection = normalizeOrZero(
     addVec3(
       addVec3(

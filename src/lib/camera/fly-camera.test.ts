@@ -185,4 +185,81 @@ describe('stepFlyCamera', () => {
 
     expect(boostedState.speed).toBeGreaterThan(cruisingState.speed + 20)
   })
+
+  it('moves right when positive strafe input is used', () => {
+    const initialState = createInitialFlyCameraState()
+    const up = normalizeVec3(initialState.position)
+    const tangentialForward = normalizeVec3(
+      subtractVec3(
+        initialState.forward,
+        scaleVec3(
+          up,
+          initialState.forward.x * up.x +
+            initialState.forward.y * up.y +
+            initialState.forward.z * up.z
+        )
+      )
+    )
+    const expectedRight = normalizeVec3(crossVec3(tangentialForward, up))
+    const nextState = stepFlyCamera(
+      initialState,
+      {
+        boost: false,
+        forward: 0,
+        lift: 0,
+        strafe: 1,
+      },
+      1 / 60
+    )
+    const delta = subtractVec3(nextState.position, initialState.position)
+    const rightwardDistance =
+      delta.x * expectedRight.x +
+      delta.y * expectedRight.y +
+      delta.z * expectedRight.z
+
+    expect(rightwardDistance).toBeGreaterThan(0)
+  })
 })
+
+function normalizeVec3(vector: { x: number; y: number; z: number }) {
+  const length = Math.hypot(vector.x, vector.y, vector.z) || 1
+
+  return {
+    x: vector.x / length,
+    y: vector.y / length,
+    z: vector.z / length,
+  }
+}
+
+function subtractVec3(
+  left: { x: number; y: number; z: number },
+  right: { x: number; y: number; z: number }
+) {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z,
+  }
+}
+
+function scaleVec3(
+  vector: { x: number; y: number; z: number },
+  scalar: number
+) {
+  return {
+    x: vector.x * scalar,
+    y: vector.y * scalar,
+    z: vector.z * scalar,
+  }
+}
+
+function crossVec3(
+  left: { x: number; y: number; z: number },
+  right: { x: number; y: number; z: number }
+) {
+  return {
+    x: left.y * right.z - left.z * right.y,
+    y: left.z * right.x - left.x * right.z,
+    z: left.x * right.y - left.y * right.x,
+  }
+}
