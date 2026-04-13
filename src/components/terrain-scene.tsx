@@ -1,6 +1,7 @@
 import { FlyCameraController } from '@/components/fly-camera-controller'
 import { SnowParticles } from '@/components/snow-particles'
 import { createInitialFlyCameraState } from '@/lib/camera/fly-camera'
+import { isSharedArrayBuffer } from '@/lib/shared/shared-array-buffer'
 import {
   createTerrainChunkGeometry,
   samplePlanetTerrainHeight,
@@ -471,8 +472,9 @@ function TerrainWorld({
                 buildOrigin,
                 edgeMorph: desiredEdgeMorph,
                 geometry,
-                sharedArrayBufferBacked:
-                  chunkBuffers.positions.buffer instanceof SharedArrayBuffer,
+                sharedArrayBufferBacked: isSharedArrayBuffer(
+                  chunkBuffers.positions.buffer
+                ),
                 stats: chunkBuffers.stats,
               },
             }

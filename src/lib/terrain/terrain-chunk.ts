@@ -1,4 +1,5 @@
 import { BufferAttribute, BufferGeometry, Float32BufferAttribute } from 'three'
+import { hasSharedArrayBufferSupport } from '@/lib/shared/shared-array-buffer'
 import { NoiseGenerator } from './noise'
 import {
   PLANET_MAX_HEIGHT,
@@ -742,7 +743,7 @@ function createUint32Array(length: number, useSharedArrayBuffer: boolean) {
 }
 
 function createBuffer(byteLength: number, useSharedArrayBuffer: boolean) {
-  return useSharedArrayBuffer && typeof SharedArrayBuffer !== 'undefined'
+  return useSharedArrayBuffer && hasSharedArrayBufferSupport()
     ? new SharedArrayBuffer(byteLength)
     : new ArrayBuffer(byteLength)
 }
