@@ -13,8 +13,6 @@ This repo is not trying to be a full game right now.
 
 It is a terrain and rendering project first.
 
-That is why the player character was removed.
-
 The current product is two strong modes.
 
 - Inspect mode for shape. streaming. and LOD work.
