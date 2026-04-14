@@ -205,6 +205,70 @@ export function TerrainDebugPanel({
                 value={settings.weather.snowDensity}
               />
               <SliderControl
+                label="Ground build"
+                max={2.5}
+                min={0}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    weather: {
+                      ...settings.weather,
+                      accumulationRate: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.weather.accumulationRate}
+              />
+              <SliderControl
+                label="Ground melt"
+                max={2}
+                min={0}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    weather: {
+                      ...settings.weather,
+                      meltRate: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.weather.meltRate}
+              />
+              <SliderControl
+                label="Ground wind"
+                max={2}
+                min={0}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    weather: {
+                      ...settings.weather,
+                      windStrength: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.weather.windStrength}
+              />
+              <SliderControl
+                label="Snow look"
+                max={2}
+                min={0}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    weather: {
+                      ...settings.weather,
+                      coverageStrength: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.weather.coverageStrength}
+              />
+              <SliderControl
                 label="Fall speed"
                 max={2.2}
                 min={0.2}

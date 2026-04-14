@@ -7,6 +7,7 @@ This panel exists to make the terrain sandbox easier to study.
 - Terrain generation strength values.
 - Terrain material response values.
 - Snow and weather values.
+- Ground snow accumulation rate. melt rate. wind loss. and visual strength.
 - Lighting and fog values.
 
 ## Why it is useful

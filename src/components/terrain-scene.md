@@ -10,6 +10,7 @@ This component is the live bridge between the pure terrain systems and the runni
 - Planet chunk diffing and chunk request priority.
 - Inspect mode and fly mode.
 - Snow and sky scene integration.
+- Snow accumulation compute scheduling and chunk snow state lifetime.
 - Floating origin display offset.
 - Small browser debug helpers.
 - Runtime debug settings from the overlay panel.
@@ -19,6 +20,7 @@ This component is the live bridge between the pure terrain systems and the runni
 - The hard terrain math stays in `src/lib/terrain`. That keeps the generator. quadtree. and chunk logic testable with Vitest.
 - The fly controller math lives in `src/lib/camera`. That keeps camera feel work separate from terrain streaming.
 - The scene layer only handles integration. loading. mesh lifetime. camera hookup. and runtime checks.
+- The snow accumulation state lives next to the chunk runtime state instead of React state. That keeps the compute loop off the rerender path.
 - The world render offset lives in a single group. That lets the fly camera move without forcing every terrain mesh prop to be recomputed through React on every frame.
 - The scene exports a compact debug state with chunk count. triangle count. LOD split. and SharedArrayBuffer usage so the UI can teach what the renderer is doing.
 

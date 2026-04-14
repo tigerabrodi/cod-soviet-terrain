@@ -48,10 +48,13 @@ export interface TerrainChunkBuffers {
   indices: Uint16Array | Uint32Array
   normals: Float32Array
   positions: Float32Array
+  snowCoverage: Float32Array
+  snowSupport: Float32Array
   splatWeights: Float32Array
   stats: TerrainChunkStats
   terrainCoords: Float32Array
   terrainHeights: Float32Array
+  terrainUps: Float32Array
 }
 
 export interface TerrainChunkData {
@@ -136,12 +139,24 @@ export function createTerrainChunkGeometry(chunkBuffers: TerrainChunkBuffers) {
     new Float32BufferAttribute(chunkBuffers.splatWeights, 4)
   )
   geometry.setAttribute(
+    'snowCoverage',
+    new Float32BufferAttribute(chunkBuffers.snowCoverage, 1)
+  )
+  geometry.setAttribute(
+    'snowSupport',
+    new Float32BufferAttribute(chunkBuffers.snowSupport, 1)
+  )
+  geometry.setAttribute(
     'terrainCoords',
     new Float32BufferAttribute(chunkBuffers.terrainCoords, 3)
   )
   geometry.setAttribute(
     'terrainHeight',
     new Float32BufferAttribute(chunkBuffers.terrainHeights, 1)
+  )
+  geometry.setAttribute(
+    'terrainUp',
+    new Float32BufferAttribute(chunkBuffers.terrainUps, 3)
   )
   geometry.setIndex(new BufferAttribute(chunkBuffers.indices, 1))
   geometry.computeBoundingBox()
@@ -289,12 +304,14 @@ function generateFlatTerrainChunkBuffers(
   )
 
   accumulateTerrainChunkNormals(arrays.positions, indices, arrays.normals)
-  applySplatWeights(arrays, maxHeight, minHeight)
+  applyTerrainSurfaceData(arrays, maxHeight, minHeight)
 
   return {
     indices,
     normals: arrays.normals,
     positions: arrays.positions,
+    snowCoverage: arrays.snowCoverage,
+    snowSupport: arrays.snowSupport,
     splatWeights: arrays.splatWeights,
     stats: {
       averageHeight: heightTotal / baseVertexCount,
@@ -305,6 +322,7 @@ function generateFlatTerrainChunkBuffers(
     },
     terrainCoords: arrays.terrainCoords,
     terrainHeights: arrays.terrainHeights,
+    terrainUps: arrays.surfaceUps,
   }
 }
 
@@ -394,12 +412,14 @@ function generatePlanetTerrainChunkBuffers(
   )
 
   accumulateTerrainChunkNormals(arrays.positions, indices, arrays.normals)
-  applySplatWeights(arrays, PLANET_MAX_HEIGHT, PLANET_MIN_HEIGHT)
+  applyTerrainSurfaceData(arrays, PLANET_MAX_HEIGHT, PLANET_MIN_HEIGHT)
 
   return {
     indices,
     normals: arrays.normals,
     positions: arrays.positions,
+    snowCoverage: arrays.snowCoverage,
+    snowSupport: arrays.snowSupport,
     splatWeights: arrays.splatWeights,
     stats: {
       averageHeight: heightTotal / baseVertexCount,
@@ -410,10 +430,11 @@ function generatePlanetTerrainChunkBuffers(
     },
     terrainCoords: arrays.terrainCoords,
     terrainHeights: arrays.terrainHeights,
+    terrainUps: arrays.surfaceUps,
   }
 }
 
-function applySplatWeights(
+function applyTerrainSurfaceData(
   arrays: TerrainBuildArrays,
   maxHeight: number,
   minHeight: number
@@ -431,12 +452,15 @@ function applySplatWeights(
     arrays.splatWeights[splatOffset + 1] = weights[1]
     arrays.splatWeights[splatOffset + 2] = weights[2]
     arrays.splatWeights[splatOffset + 3] = weights[3]
+    arrays.snowSupport[index] = smoothstep(0.36, 0.97, flatness)
   }
 }
 
 interface TerrainBuildArrays {
   normals: Float32Array
   positions: Float32Array
+  snowCoverage: Float32Array
+  snowSupport: Float32Array
   splatWeights: Float32Array
   surfaceUps: Float32Array
   terrainCoords: Float32Array
@@ -455,6 +479,8 @@ function createTerrainChunkArrays(
   return {
     normals: createFloat32Array(vertexCount * 3, useSharedArrayBuffer),
     positions: createFloat32Array(vertexCount * 3, useSharedArrayBuffer),
+    snowCoverage: createFloat32Array(vertexCount, useSharedArrayBuffer),
+    snowSupport: createFloat32Array(vertexCount, useSharedArrayBuffer),
     splatWeights: createFloat32Array(vertexCount * 4, useSharedArrayBuffer),
     surfaceUps: createFloat32Array(vertexCount * 3, useSharedArrayBuffer),
     terrainCoords: createFloat32Array(vertexCount * 3, useSharedArrayBuffer),

@@ -1,11 +1,28 @@
 import { FlyCameraController } from '@/components/fly-camera-controller'
+import {
+  INITIAL_ORBIT_CAMERA_POSITION,
+  getModeSetup,
+  type CameraMode,
+} from '@/components/terrain-scene-camera'
 import { SnowParticles } from '@/components/snow-particles'
-import { createInitialFlyCameraState } from '@/lib/camera/fly-camera'
+import {
+  FloatingOriginTracker,
+  OrbitCamera,
+  SkyDome,
+  WorldOriginAnchor,
+} from '@/components/terrain-scene-runtime'
+import {
+  applyCameraSetup,
+  createPlanetBackdropGeometry,
+  edgeMorphEquals,
+  getChunkRequestSignature,
+  getDistance,
+  toOriginTuple,
+} from '@/components/terrain-scene-utils'
 import type { TerrainDebugSettings } from '@/lib/debug/terrain-debug'
 import { isSharedArrayBuffer } from '@/lib/shared/shared-array-buffer'
 import {
   createTerrainChunkGeometry,
-  samplePlanetTerrainHeight,
   type TerrainChunkStats,
 } from '@/lib/terrain/terrain-chunk'
 import {
@@ -26,6 +43,12 @@ import {
 } from '@/lib/terrain/terrain-textures'
 import { TerrainChunkWorkerPool } from '@/lib/terrain/terrain-worker-pool'
 import { createTerrainGenerationSignature } from '@/lib/terrain/terrain-settings'
+import {
+  createSnowAccumulationRuntimeState,
+  updateSnowAccumulationRuntimeState,
+  type SnowAccumulationRuntimeState,
+  type SnowAccumulationSettings,
+} from '@/lib/weather/snow-accumulation'
 import { createSkyDomeGeometry } from '@/lib/sky/sky-dome'
 import { loadSkyEnvironment } from '@/lib/sky/sky-environment'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
@@ -34,14 +57,10 @@ import {
   useMemo,
   useRef,
   useState,
-  type MutableRefObject,
-  type ReactNode,
 } from 'react'
-import { Camera, Euler, Group, SphereGeometry, type Mesh } from 'three'
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { Euler } from 'three'
 import {
   ACESFilmicToneMapping,
-  BackSide,
   Color,
   FogExp2,
   PCFSoftShadowMap,
@@ -63,8 +82,6 @@ export interface TerrainSceneProps {
   onDebugStateChange?: (debugState: TerrainSceneDebugState) => void
   onReadyChange?: (ready: boolean) => void
 }
-
-export type CameraMode = 'fly' | 'orbit'
 
 export interface TerrainSceneDebugState {
   cameraFocusWorld: Vec3Like
@@ -94,9 +111,7 @@ const ZERO_EDGE_MORPH: TerrainChunkEdgeMorph = {
   south: 0,
   west: 0,
 }
-const INITIAL_ORBIT_CAMERA_POSITION = [640, 460, 640] as const
-const INITIAL_FLY_CAMERA_STATE = createInitialFlyCameraState()
-const ZERO_VECTOR = { x: 0, y: 0, z: 0 } as const
+const SNOW_SIMULATION_INTERVAL_SECONDS = 0.18
 
 export function TerrainScene({
   cameraMode,
@@ -173,6 +188,22 @@ function TerrainWorld({
   const [cameraFocusWorld, setCameraFocusWorld] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).cameraFocusWorld
   )
+  const snowAccumulationSettings = useMemo<SnowAccumulationSettings>(
+    () => ({
+      accumulationRate: debugSettings.weather.accumulationRate,
+      meltRate: debugSettings.weather.meltRate,
+      visualStrength: debugSettings.weather.coverageStrength,
+      windStrength: debugSettings.weather.windStrength,
+    }),
+    [debugSettings.weather]
+  )
+  const snowfallIntensity = useMemo(
+    () =>
+      debugSettings.weather.snowEnabled
+        ? Math.min(1, debugSettings.weather.snowDensity * 0.55)
+        : 0,
+    [debugSettings.weather.snowDensity, debugSettings.weather.snowEnabled]
+  )
   const terrainGenerationSignature = useMemo(
     () => createTerrainGenerationSignature(debugSettings.terrainGeneration),
     [debugSettings.terrainGeneration]
@@ -183,10 +214,13 @@ function TerrainWorld({
       terrainTextures
         ? createTerrainMaterial(
             terrainTextures,
-            debugSettings.terrainMaterial as TerrainMaterialSettings
+            {
+              ...(debugSettings.terrainMaterial as TerrainMaterialSettings),
+              snowAccumulationStrength: snowAccumulationSettings.visualStrength,
+            }
           )
         : null,
-    [debugSettings.terrainMaterial, terrainTextures]
+    [debugSettings.terrainMaterial, snowAccumulationSettings, terrainTextures]
   )
   const planetBackdropGeometry = useMemo(
     () => createPlanetBackdropGeometry(debugSettings.terrainGeneration),
@@ -215,6 +249,8 @@ function TerrainWorld({
   const inflightChunkLookupRef = useRef(new Map<string, string>())
   const previousCameraModeRef = useRef<CameraMode | null>(null)
   const terrainChunksRef = useRef<Record<string, TerrainChunkRuntime>>({})
+  const snowStateLookupRef = useRef(new Map<string, SnowAccumulationRuntimeState>())
+  const snowSimulationAccumulatorRef = useRef(0)
   const workerPoolRef = useRef<TerrainChunkWorkerPool | null>(null)
   const worldOriginRef = useRef<Vec3Like>(getModeSetup(cameraMode).worldOrigin)
   const isTerrainWindowReady = desiredChunkDescriptors.every((terrainChunk) => {
@@ -398,6 +434,7 @@ function TerrainWorld({
   ])
 
   useEffect(() => {
+    const snowStates = snowStateLookupRef.current
     const workerPool = new TerrainChunkWorkerPool()
     workerPoolRef.current = workerPool
 
@@ -408,6 +445,8 @@ function TerrainWorld({
       for (const terrainChunk of Object.values(terrainChunksRef.current)) {
         terrainChunk.geometry.dispose()
       }
+
+      snowStates.clear()
     }
   }, [])
 
@@ -436,6 +475,7 @@ function TerrainWorld({
         nextTerrainChunks[terrainChunkKey]?.geometry.dispose()
         delete nextTerrainChunks[terrainChunkKey]
         inflightChunkLookupRef.current.delete(terrainChunkKey)
+        snowStateLookupRef.current.delete(terrainChunkKey)
       }
 
       terrainChunksRef.current = nextTerrainChunks
@@ -531,6 +571,17 @@ function TerrainWorld({
           }
 
           const geometry = createTerrainChunkGeometry(chunkBuffers)
+          const snowState = createSnowAccumulationRuntimeState({
+            accumulation: chunkBuffers.snowCoverage,
+            key: terrainChunk.key,
+            settingsVersion: terrainGenerationSignature,
+            support: chunkBuffers.snowSupport,
+            terrainCoords: chunkBuffers.terrainCoords,
+            terrainHeights: chunkBuffers.terrainHeights,
+            vertexCount: chunkBuffers.terrainHeights.length,
+          })
+
+          geometry.setAttribute('snowCoverage', snowState.accumulationAttribute)
 
           setTerrainChunks((currentTerrainChunks) => {
             const currentChunk = currentTerrainChunks[terrainChunk.key]
@@ -546,6 +597,8 @@ function TerrainWorld({
             }
 
             currentChunk?.geometry.dispose()
+            snowStateLookupRef.current.delete(terrainChunk.key)
+            snowStateLookupRef.current.set(terrainChunk.key, snowState)
 
             const nextTerrainChunks = {
               ...currentTerrainChunks,
@@ -583,6 +636,49 @@ function TerrainWorld({
     desiredEdgeMorphs,
     terrainGenerationSignature,
   ])
+
+  useFrame((_, deltaTimeSeconds) => {
+    const snowStates = snowStateLookupRef.current
+
+    if (snowStates.size === 0) {
+      snowSimulationAccumulatorRef.current = 0
+      return
+    }
+
+    snowSimulationAccumulatorRef.current += deltaTimeSeconds
+
+    if (snowSimulationAccumulatorRef.current < SNOW_SIMULATION_INTERVAL_SECONDS) {
+      return
+    }
+
+    const simulationDeltaSeconds = Math.min(
+      snowSimulationAccumulatorRef.current,
+      0.42
+    )
+    const renderer = gl as unknown as WebGPURenderer
+
+    snowSimulationAccumulatorRef.current = 0
+
+    for (const [terrainChunkKey, snowState] of snowStates) {
+      const terrainChunk = terrainChunksRef.current[terrainChunkKey]
+
+      if (
+        !terrainChunk ||
+        terrainChunk.terrainGenerationSignature !== snowState.settingsVersion
+      ) {
+        snowStates.delete(terrainChunkKey)
+        continue
+      }
+
+      updateSnowAccumulationRuntimeState(
+        renderer,
+        snowState,
+        simulationDeltaSeconds,
+        snowfallIntensity,
+        snowAccumulationSettings
+      )
+    }
+  })
 
   useEffect(() => {
     return () => {
@@ -655,6 +751,7 @@ function TerrainWorld({
         <>
           <FloatingOriginTracker
             cameraFocusWorld={cameraFocusWorld}
+            focusRefreshDistance={FOCUS_REFRESH_DISTANCE}
             onCameraFocusWorldChange={setCameraFocusWorld}
           />
           <OrbitCamera />
@@ -676,226 +773,4 @@ function TerrainWorld({
       )}
     </>
   )
-}
-
-function FloatingOriginTracker({
-  cameraFocusWorld,
-  onCameraFocusWorldChange,
-}: {
-  cameraFocusWorld: Vec3Like
-  onCameraFocusWorldChange: (cameraFocusWorld: Vec3Like) => void
-}) {
-  const camera = useThree((state) => state.camera)
-
-  useFrame(() => {
-    const nextWorldCameraPosition = {
-      x: camera.position.x,
-      y: camera.position.y,
-      z: camera.position.z,
-    }
-
-    if (
-      getDistance(nextWorldCameraPosition, cameraFocusWorld) >=
-      FOCUS_REFRESH_DISTANCE
-    ) {
-      onCameraFocusWorldChange(nextWorldCameraPosition)
-    }
-  })
-
-  return null
-}
-
-function WorldOriginAnchor({
-  children,
-  originRef,
-}: {
-  children: ReactNode
-  originRef: MutableRefObject<Vec3Like>
-}) {
-  const groupRef = useRef<Group>(null)
-
-  useFrame(() => {
-    const origin = originRef.current
-
-    groupRef.current?.position.set(-origin.x, -origin.y, -origin.z)
-  })
-
-  return <group ref={groupRef}>{children}</group>
-}
-
-function SkyDome({
-  geometry,
-}: {
-  geometry: ReturnType<typeof createSkyDomeGeometry>
-}) {
-  const camera = useThree((state) => state.camera)
-  const meshRef = useRef<Mesh>(null)
-
-  useFrame(() => {
-    meshRef.current?.position.copy(camera.position)
-  })
-
-  return (
-    <mesh frustumCulled={false} geometry={geometry} ref={meshRef}>
-      <meshBasicMaterial
-        fog={false}
-        side={BackSide}
-        toneMapped={false}
-        vertexColors
-      />
-    </mesh>
-  )
-}
-
-function OrbitCamera() {
-  const camera = useThree((state) => state.camera)
-  const gl = useThree((state) => state.gl)
-
-  const controls = useMemo(() => {
-    const nextControls = new OrbitControls(camera, gl.domElement)
-    nextControls.enableDamping = true
-    nextControls.dampingFactor = 0.06
-    nextControls.enablePan = false
-    nextControls.maxDistance = 1600
-    nextControls.maxPolarAngle = Math.PI * 0.94
-    nextControls.minDistance = 220
-    nextControls.minPolarAngle = Math.PI * 0.06
-    nextControls.target.set(0, 0, 0)
-
-    return nextControls
-  }, [camera, gl.domElement])
-
-  useEffect(() => {
-    controls.target.set(0, 0, 0)
-
-    return () => {
-      controls.dispose()
-    }
-  }, [controls])
-
-  useFrame(() => {
-    controls.update()
-  })
-
-  return null
-}
-
-function edgeMorphEquals(
-  left: TerrainChunkEdgeMorph,
-  right: TerrainChunkEdgeMorph
-) {
-  return (
-    left.east === right.east &&
-    left.north === right.north &&
-    left.south === right.south &&
-    left.west === right.west
-  )
-}
-
-function getChunkRequestSignature(
-  resolution: number,
-  edgeMorph: TerrainChunkEdgeMorph,
-  terrainGenerationSignature: string
-) {
-  return `${resolution}:${edgeMorph.east}:${edgeMorph.north}:${edgeMorph.south}:${edgeMorph.west}:${terrainGenerationSignature}`
-}
-
-function getModeSetup(cameraMode: CameraMode) {
-  if (cameraMode === 'fly') {
-    const up = normalizeVec3(INITIAL_FLY_CAMERA_STATE.position)
-
-    return {
-      cameraFocusWorld: INITIAL_FLY_CAMERA_STATE.position,
-      localCameraPosition: [0, 0, 0] as const,
-      localLookAt: [
-        INITIAL_FLY_CAMERA_STATE.forward.x,
-        INITIAL_FLY_CAMERA_STATE.forward.y,
-        INITIAL_FLY_CAMERA_STATE.forward.z,
-      ] as const,
-      localUp: [up.x, up.y, up.z] as const,
-      worldOrigin: INITIAL_FLY_CAMERA_STATE.position,
-    }
-  }
-
-  return {
-    cameraFocusWorld: {
-      x: INITIAL_ORBIT_CAMERA_POSITION[0],
-      y: INITIAL_ORBIT_CAMERA_POSITION[1],
-      z: INITIAL_ORBIT_CAMERA_POSITION[2],
-    },
-    localCameraPosition: INITIAL_ORBIT_CAMERA_POSITION,
-    localLookAt: [0, 0, 0] as const,
-    localUp: [0, 1, 0] as const,
-    worldOrigin: ZERO_VECTOR,
-  }
-}
-
-function applyCameraSetup(
-  camera: Camera,
-  setup: ReturnType<typeof getModeSetup>
-) {
-  camera.position.set(
-    setup.localCameraPosition[0],
-    setup.localCameraPosition[1],
-    setup.localCameraPosition[2]
-  )
-  camera.up.set(setup.localUp[0], setup.localUp[1], setup.localUp[2])
-  camera.lookAt(
-    setup.localLookAt[0],
-    setup.localLookAt[1],
-    setup.localLookAt[2]
-  )
-}
-
-function normalizeVec3(vector: Vec3Like) {
-  const length = Math.hypot(vector.x, vector.y, vector.z) || 1
-
-  return {
-    x: vector.x / length,
-    y: vector.y / length,
-    z: vector.z / length,
-  }
-}
-
-function getDistance(left: Vec3Like, right: Vec3Like) {
-  return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z)
-}
-
-function toOriginTuple(vector: Vec3Like): readonly [number, number, number] {
-  return [vector.x, vector.y, vector.z]
-}
-
-function createPlanetBackdropGeometry(
-  terrainSettings: TerrainSceneProps['debugSettings']['terrainGeneration']
-) {
-  const geometry = new SphereGeometry(PLANET_RADIUS - 8, 72, 44)
-  const positions = geometry.getAttribute('position')
-
-  for (let index = 0; index < positions.count; index += 1) {
-    const x = positions.getX(index)
-    const y = positions.getY(index)
-    const z = positions.getZ(index)
-    const length = Math.hypot(x, y, z) || 1
-    const up = {
-      x: x / length,
-      y: y / length,
-      z: z / length,
-    }
-    const height = samplePlanetTerrainHeight(
-      up.x * PLANET_RADIUS,
-      up.y * PLANET_RADIUS,
-      up.z * PLANET_RADIUS,
-      terrainSettings
-    )
-    const radius = PLANET_RADIUS + height - 10
-
-    positions.setXYZ(index, up.x * radius, up.y * radius, up.z * radius)
-  }
-
-  positions.needsUpdate = true
-  geometry.computeVertexNormals()
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-
-  return geometry
 }

@@ -206,6 +206,20 @@ The snow volume follows the camera instead of trying to simulate weather over th
 
 That keeps density high near the viewer and keeps the runtime cost under control.
 
+Ground snow accumulation is a separate system.
+
+The particles do not directly paint the terrain.
+
+Instead the terrain owns a per chunk snow coverage field that is updated through a compute pass.
+
+That field then feeds the terrain material.
+
+This is the practical split.
+
+- particles for atmosphere.
+- accumulation for simulation.
+- terrain shading for final appearance.
+
 ## Sky and lighting
 
 The project uses a cold overcast sky dome and a sky environment map.

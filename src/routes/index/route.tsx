@@ -1,8 +1,6 @@
 import { TerrainDebugPanel } from '@/components/terrain-debug-panel'
-import type {
-  CameraMode,
-  TerrainSceneDebugState,
-} from '@/components/terrain-scene'
+import type { CameraMode } from '@/components/terrain-scene-camera'
+import type { TerrainSceneDebugState } from '@/components/terrain-scene'
 import {
   TERRAIN_DEBUG_STORAGE_KEY,
   clampTerrainDebugSettings,

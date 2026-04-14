@@ -70,12 +70,18 @@ describe('buildTerrainChunk', () => {
     try {
       expect(chunkBuffers.positions.length).toBe(81 * 3)
       expect(chunkBuffers.normals.length).toBe(81 * 3)
+      expect(chunkBuffers.snowCoverage.length).toBe(81)
+      expect(chunkBuffers.snowSupport.length).toBe(81)
       expect(chunkBuffers.splatWeights.length).toBe(81 * 4)
+      expect(chunkBuffers.terrainUps.length).toBe(81 * 3)
       expect(chunkBuffers.indices.length).toBe(384)
 
       expect(geometry.getAttribute('position').count).toBe(81)
       expect(geometry.getAttribute('normal').count).toBe(81)
+      expect(geometry.getAttribute('snowCoverage').count).toBe(81)
+      expect(geometry.getAttribute('snowSupport').count).toBe(81)
       expect(geometry.getAttribute('splatWeights').count).toBe(81)
+      expect(geometry.getAttribute('terrainUp').count).toBe(81)
       expect(geometry.index?.count).toBe(384)
     } finally {
       geometry.dispose()
@@ -91,6 +97,8 @@ describe('buildTerrainChunk', () => {
 
     expect(chunkBuffers.positions.buffer).toBeInstanceOf(SharedArrayBuffer)
     expect(chunkBuffers.normals.buffer).toBeInstanceOf(SharedArrayBuffer)
+    expect(chunkBuffers.snowCoverage.buffer).toBeInstanceOf(SharedArrayBuffer)
+    expect(chunkBuffers.snowSupport.buffer).toBeInstanceOf(SharedArrayBuffer)
     expect(chunkBuffers.splatWeights.buffer).toBeInstanceOf(SharedArrayBuffer)
     expect(chunkBuffers.indices.buffer).toBeInstanceOf(SharedArrayBuffer)
   })
@@ -106,10 +114,13 @@ describe('buildTerrainChunk', () => {
     try {
       expect(chunkBuffers.positions.length).toBe(65 * 3)
       expect(chunkBuffers.normals.length).toBe(65 * 3)
+      expect(chunkBuffers.snowCoverage.length).toBe(65)
+      expect(chunkBuffers.snowSupport.length).toBe(65)
       expect(chunkBuffers.splatWeights.length).toBe(65 * 4)
       expect(chunkBuffers.indices.length).toBe(192)
 
       expect(geometry.getAttribute('position').count).toBe(65)
+      expect(geometry.getAttribute('snowSupport').count).toBe(65)
       expect(geometry.index?.count).toBe(192)
     } finally {
       geometry.dispose()
@@ -177,17 +188,29 @@ describe('buildTerrainChunk', () => {
     try {
       const positions = geometry.getAttribute('position')
       const normals = geometry.getAttribute('normal')
+      const snowCoverage = geometry.getAttribute('snowCoverage')
+      const snowSupport = geometry.getAttribute('snowSupport')
       const splatWeights = geometry.getAttribute('splatWeights')
+      const terrainUp = geometry.getAttribute('terrainUp')
 
       expect(positions.count).toBe(81)
       expect(geometry.index?.count).toBe(384)
       expect(normals.count).toBe(81)
+      expect(snowCoverage.count).toBe(81)
+      expect(snowSupport.count).toBe(81)
       expect(splatWeights.count).toBe(81)
       expect(splatWeights.itemSize).toBe(4)
+      expect(terrainUp.count).toBe(81)
 
       expect(stats.averageHeight).toBeCloseTo(4.975243859075985, 8)
       expect(stats.minHeight).toBeCloseTo(0.6348755402730268, 8)
       expect(stats.maxHeight).toBeCloseTo(9.656834248660495, 8)
+
+      for (let index = 0; index < snowCoverage.count; index += 1) {
+        expect(snowCoverage.getX(index)).toBe(0)
+        expect(snowSupport.getX(index)).toBeGreaterThanOrEqual(0)
+        expect(snowSupport.getX(index)).toBeLessThanOrEqual(1)
+      }
 
       for (let index = 0; index < splatWeights.count; index += 1) {
         let total = 0

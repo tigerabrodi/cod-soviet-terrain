@@ -22,19 +22,24 @@ import type { TerrainTextureSet } from './terrain-textures'
 
 export interface TerrainMaterialSettings {
   frostStrength: number
+  snowAccumulationStrength: number
   textureScale: number
 }
 
 export const DEFAULT_TERRAIN_MATERIAL_SETTINGS: TerrainMaterialSettings = {
   frostStrength: 1,
+  snowAccumulationStrength: 1,
   textureScale: 1,
 }
 
 const DEFAULT_TILE_SCALE = float(0.085)
 const DETAIL_NORMAL_STRENGTH = float(0.6)
 const GEOMETRY_NORMAL_STRENGTH = float(0.4)
+const SNOW_NORMAL_SOFTENING = float(0.78)
 const terrainCoords = attribute('terrainCoords', 'vec3')
 const terrainHeight = attribute('terrainHeight', 'float')
+const terrainUp = attribute('terrainUp', 'vec3')
+const snowCoverage = attribute('snowCoverage', 'float')
 
 const getProjectionWeights = Fn(([surfaceNormal = normalLocal]) => {
   const axisWeights = surfaceNormal.abs().add(0.0001).toVar()
@@ -224,18 +229,36 @@ export function createTerrainMaterial(
   const frostAmount = smoothstep(float(16), float(30), terrainHeight)
     .mul(float(settings.frostStrength))
     .clamp(0, 1)
-  const finalColor = mix(
+  const frostTintedColor = mix(
     blendedColor,
     blendedColor.mul(vec3(1.04, 1.05, 1.08)),
     frostAmount
   )
+  const accumulationAmount = snowCoverage
+    .mul(float(settings.snowAccumulationStrength))
+    .clamp(0, 1)
+  const finalSnowAmount = accumulationAmount.mul(0.82).add(
+    frostAmount.mul(0.18)
+  ).clamp(
+    0,
+    1
+  )
+  const snowTint = mix(vec3(0.84, 0.88, 0.93), vec3(0.97, 0.985, 1), 0.82)
+  const softenedNormal = mix(
+    finalNormal,
+    terrainUp.normalize(),
+    finalSnowAmount.mul(SNOW_NORMAL_SOFTENING)
+  ).normalize()
+  const finalColor = mix(frostTintedColor, snowTint, finalSnowAmount)
+  const finalRoughness = mix(blendedRoughness, float(0.9), finalSnowAmount)
+  const finalMetalness = mix(blendedMetalness, float(0), finalSnowAmount)
 
   const material = new MeshStandardNodeMaterial()
   material.name = 'TerrainChunkMaterial'
   material.colorNode = finalColor
-  material.roughnessNode = blendedRoughness
-  material.metalnessNode = blendedMetalness
-  material.normalNode = transformNormalToView(finalNormal)
+  material.roughnessNode = finalRoughness
+  material.metalnessNode = finalMetalness
+  material.normalNode = transformNormalToView(softenedNormal)
 
   return material
 }

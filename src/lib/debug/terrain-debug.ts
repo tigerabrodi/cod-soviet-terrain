@@ -17,10 +17,14 @@ export interface TerrainLightingDebugSettings {
 }
 
 export interface TerrainWeatherDebugSettings {
+  accumulationRate: number
+  coverageStrength: number
   driftStrength: number
   fallSpeed: number
+  meltRate: number
   snowDensity: number
   snowEnabled: boolean
+  windStrength: number
 }
 
 export interface TerrainDebugSettings {
@@ -44,10 +48,14 @@ export const DEFAULT_TERRAIN_DEBUG_SETTINGS: TerrainDebugSettings = {
     textureScale: 1,
   },
   weather: {
+    accumulationRate: 0.35,
+    coverageStrength: 0.85,
     driftStrength: 1,
     fallSpeed: 1,
+    meltRate: 0.28,
     snowDensity: 1,
     snowEnabled: true,
+    windStrength: 0.55,
   },
 }
 
@@ -79,10 +87,14 @@ export function clampTerrainDebugSettings(settings: TerrainDebugSettings) {
       textureScale: clamp(settings.terrainMaterial.textureScale, 0.45, 1.8),
     },
     weather: {
+      accumulationRate: clamp(settings.weather.accumulationRate, 0, 2.5),
+      coverageStrength: clamp(settings.weather.coverageStrength, 0, 2),
       driftStrength: clamp(settings.weather.driftStrength, 0, 2),
       fallSpeed: clamp(settings.weather.fallSpeed, 0.2, 2.2),
+      meltRate: clamp(settings.weather.meltRate, 0, 2),
       snowDensity: clamp(settings.weather.snowDensity, 0, 2),
       snowEnabled: settings.weather.snowEnabled,
+      windStrength: clamp(settings.weather.windStrength, 0, 2),
     },
   }
 }

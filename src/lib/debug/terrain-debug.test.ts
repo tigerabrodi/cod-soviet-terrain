@@ -25,10 +25,14 @@ describe('clampTerrainDebugSettings', () => {
         textureScale: 0.1,
       },
       weather: {
+        accumulationRate: 9,
+        coverageStrength: 9,
         driftStrength: -5,
         fallSpeed: 9,
+        meltRate: -4,
         snowDensity: -1,
         snowEnabled: true,
+        windStrength: 7,
       },
     })
 
@@ -41,9 +45,13 @@ describe('clampTerrainDebugSettings', () => {
     expect(clamped.terrainGeneration.craterStrength).toBe(0)
     expect(clamped.terrainMaterial.textureScale).toBe(0.45)
     expect(clamped.terrainMaterial.frostStrength).toBe(2)
+    expect(clamped.weather.accumulationRate).toBe(2.5)
+    expect(clamped.weather.coverageStrength).toBe(2)
     expect(clamped.weather.snowDensity).toBe(0)
     expect(clamped.weather.fallSpeed).toBe(2.2)
     expect(clamped.weather.driftStrength).toBe(0)
+    expect(clamped.weather.meltRate).toBe(0)
+    expect(clamped.weather.windStrength).toBe(2)
   })
 })
 
@@ -71,6 +79,7 @@ describe('parseTerrainDebugSettings', () => {
 
     expect(parsed.terrainGeneration.heightScale).toBe(1.4)
     expect(parsed.weather.snowEnabled).toBe(false)
+    expect(parsed.weather.accumulationRate).toBe(0.35)
     expect(parsed.weather.fallSpeed).toBe(1)
     expect(parsed.lighting.sunIntensity).toBe(1)
   })
@@ -80,10 +89,14 @@ describe('getSnowParticleCount', () => {
   it('returns zero when snow is disabled', () => {
     expect(
       getSnowParticleCount({
+        accumulationRate: 1,
+        coverageStrength: 1,
         driftStrength: 1,
         fallSpeed: 1,
+        meltRate: 1,
         snowDensity: 1,
         snowEnabled: false,
+        windStrength: 1,
       })
     ).toBe(0)
   })
@@ -91,10 +104,14 @@ describe('getSnowParticleCount', () => {
   it('scales the live particle count when snow is enabled', () => {
     expect(
       getSnowParticleCount({
+        accumulationRate: 1,
+        coverageStrength: 1,
         driftStrength: 1,
         fallSpeed: 1,
+        meltRate: 1,
         snowDensity: 0.5,
         snowEnabled: true,
+        windStrength: 1,
       })
     ).toBe(4500)
   })
