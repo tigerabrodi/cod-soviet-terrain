@@ -1,4 +1,8 @@
 import { FlyCameraController } from '@/components/fly-camera-controller'
+import {
+  takeSnowChunksForSimulation,
+  useTerrainChunkStreaming,
+} from '@/components/terrain-scene-streaming'
 import { TerrainTrees } from '@/components/terrain-trees'
 import {
   INITIAL_ORBIT_CAMERA_POSITION,
@@ -16,16 +20,8 @@ import {
   applyCameraSetup,
   createPlanetBackdropGeometry,
   edgeMorphEquals,
-  getChunkRequestSignature,
-  getDistance,
-  toOriginTuple,
 } from '@/components/terrain-scene-utils'
 import type { TerrainDebugSettings } from '@/lib/debug/terrain-debug'
-import { isSharedArrayBuffer } from '@/lib/shared/shared-array-buffer'
-import {
-  createTerrainChunkGeometry,
-  type TerrainChunkStats,
-} from '@/lib/terrain/terrain-chunk'
 import {
   createTerrainMaterial,
   type TerrainMaterialSettings,
@@ -34,18 +30,14 @@ import {
   PLANET_RADIUS,
   getPlanetChunkEdgeMorphs,
   selectPlanetChunkWindow,
-  type PlanetChunkDescriptor,
-  type TerrainChunkEdgeMorph,
   type Vec3Like,
 } from '@/lib/terrain/terrain-planet'
 import {
   loadTerrainTextureSet,
   type TerrainTextureSet,
 } from '@/lib/terrain/terrain-textures'
-import { TerrainChunkWorkerPool } from '@/lib/terrain/terrain-worker-pool'
 import { createTerrainGenerationSignature } from '@/lib/terrain/terrain-settings'
 import {
-  createSnowAccumulationRuntimeState,
   updateSnowAccumulationRuntimeState,
   type SnowAccumulationRuntimeState,
   type SnowAccumulationSettings,
@@ -53,12 +45,7 @@ import {
 import { createSkyDomeGeometry } from '@/lib/sky/sky-dome'
 import { loadSkyEnvironment } from '@/lib/sky/sky-environment'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Euler } from 'three'
 import {
   ACESFilmicToneMapping,
@@ -95,24 +82,9 @@ export interface TerrainSceneDebugState {
   worldOrigin: Vec3Like
 }
 
-interface TerrainChunkRuntime extends PlanetChunkDescriptor {
-  buildOrigin: readonly [number, number, number]
-  edgeMorph: TerrainChunkEdgeMorph
-  geometry: ReturnType<typeof createTerrainChunkGeometry>
-  sharedArrayBufferBacked: boolean
-  stats: TerrainChunkStats
-  terrainGenerationSignature: string
-}
-
 const PLANET_LOD_RESOLUTIONS = [64, 32, 16] as const
-const PLANET_CHUNK_SKIRT_DEPTH = 22
 const FOCUS_REFRESH_DISTANCE = 56
-const ZERO_EDGE_MORPH: TerrainChunkEdgeMorph = {
-  east: 0,
-  north: 0,
-  south: 0,
-  west: 0,
-}
+const MAX_SNOW_CHUNKS_PER_STEP = 8
 const SNOW_SIMULATION_INTERVAL_SECONDS = 0.18
 
 export function TerrainScene({
@@ -176,9 +148,6 @@ function TerrainWorld({
   const gl = useThree((state) => state.gl)
   const getThreeState = useThree((state) => state.get)
 
-  const [terrainChunks, setTerrainChunks] = useState<
-    Record<string, TerrainChunkRuntime>
-  >({})
   const [terrainTextures, setTerrainTextures] =
     useState<TerrainTextureSet | null>(null)
   const [skyEnvironment, setSkyEnvironment] = useState<Awaited<
@@ -191,6 +160,14 @@ function TerrainWorld({
     () => getModeSetup(cameraMode).cameraFocusWorld
   )
   const [treeCountSnapshot, setTreeCountSnapshot] = useState(0)
+
+  const previousCameraModeRef = useRef<CameraMode | null>(null)
+  const snowStateLookupRef = useRef(new Map<string, SnowAccumulationRuntimeState>())
+  const snowSimulationAccumulatorRef = useRef(0)
+  const snowSimulationCursorRef = useRef(0)
+  const snowSimulationTimeRef = useRef(0)
+  const worldOriginRef = useRef<Vec3Like>(getModeSetup(cameraMode).worldOrigin)
+
   const snowAccumulationSettings = useMemo<SnowAccumulationSettings>(
     () => ({
       accumulationRate: debugSettings.weather.accumulationRate,
@@ -215,13 +192,10 @@ function TerrainWorld({
   const terrainMaterial = useMemo(
     () =>
       terrainTextures
-        ? createTerrainMaterial(
-            terrainTextures,
-            {
-              ...(debugSettings.terrainMaterial as TerrainMaterialSettings),
-              snowAccumulationStrength: snowAccumulationSettings.visualStrength,
-            }
-          )
+        ? createTerrainMaterial(terrainTextures, {
+            ...(debugSettings.terrainMaterial as TerrainMaterialSettings),
+            snowAccumulationStrength: snowAccumulationSettings.visualStrength,
+          })
         : null,
     [debugSettings.terrainMaterial, snowAccumulationSettings, terrainTextures]
   )
@@ -229,9 +203,6 @@ function TerrainWorld({
     () => createPlanetBackdropGeometry(debugSettings.terrainGeneration),
     [debugSettings.terrainGeneration]
   )
-  const isMaterialReady = terrainMaterial !== null
-  const isSkyReady = skyEnvironment !== null
-
   const desiredChunkDescriptors = useMemo(
     () =>
       selectPlanetChunkWindow(
@@ -245,29 +216,33 @@ function TerrainWorld({
     () => getPlanetChunkEdgeMorphs(desiredChunkDescriptors),
     [desiredChunkDescriptors]
   )
-  const desiredChunkLookupRef = useRef(new Map<string, PlanetChunkDescriptor>())
-  const desiredEdgeMorphLookupRef = useRef(
-    new Map<string, TerrainChunkEdgeMorph>()
+
+  const { terrainChunks, terrainChunksRef } = useTerrainChunkStreaming({
+    cameraFocusWorld,
+    desiredChunkDescriptors,
+    desiredEdgeMorphs,
+    snowSimulationTimeRef,
+    snowStateLookupRef,
+    terrainGeneration: debugSettings.terrainGeneration,
+    terrainGenerationSignature,
+    worldOriginRef,
+  })
+  const activeTerrainChunks = useMemo(
+    () => Object.values(terrainChunks),
+    [terrainChunks]
   )
-  const inflightChunkLookupRef = useRef(new Map<string, string>())
-  const previousCameraModeRef = useRef<CameraMode | null>(null)
-  const terrainChunksRef = useRef<Record<string, TerrainChunkRuntime>>({})
-  const snowStateLookupRef = useRef(new Map<string, SnowAccumulationRuntimeState>())
-  const snowSimulationAccumulatorRef = useRef(0)
-  const workerPoolRef = useRef<TerrainChunkWorkerPool | null>(null)
-  const worldOriginRef = useRef<Vec3Like>(getModeSetup(cameraMode).worldOrigin)
   const isTerrainWindowReady = desiredChunkDescriptors.every((terrainChunk) => {
     const activeChunk = terrainChunks[terrainChunk.key]
-    const desiredEdgeMorph =
-      desiredEdgeMorphs.get(terrainChunk.key) ?? ZERO_EDGE_MORPH
+    const desiredEdgeMorph = desiredEdgeMorphs.get(terrainChunk.key)
 
     return (
       activeChunk?.resolution === terrainChunk.resolution &&
-      edgeMorphEquals(activeChunk.edgeMorph, desiredEdgeMorph) &&
+      edgeMorphEquals(activeChunk.edgeMorph, desiredEdgeMorph ?? activeChunk.edgeMorph) &&
       activeChunk.terrainGenerationSignature === terrainGenerationSignature
     )
   })
-  const isSceneReady = isMaterialReady && isSkyReady && isTerrainWindowReady
+  const isSceneReady =
+    terrainMaterial !== null && skyEnvironment !== null && isTerrainWindowReady
 
   useEffect(() => {
     const previousCameraMode = previousCameraModeRef.current
@@ -307,11 +282,9 @@ function TerrainWorld({
 
     loadTerrainTextureSet(gl as Parameters<typeof loadTerrainTextureSet>[0])
       .then((textures) => {
-        if (!isMounted) {
-          return
+        if (isMounted) {
+          setTerrainTextures(textures)
         }
-
-        setTerrainTextures(textures)
       })
       .catch((error: unknown) => {
         console.error('Failed to load terrain textures.', error)
@@ -335,11 +308,9 @@ function TerrainWorld({
       gl as unknown as Parameters<typeof loadSkyEnvironment>[0]
     )
       .then((nextSkyEnvironment) => {
-        if (!isMounted) {
-          return
+        if (isMounted) {
+          setSkyEnvironment(nextSkyEnvironment)
         }
-
-        setSkyEnvironment(nextSkyEnvironment)
       })
       .catch((error: unknown) => {
         console.error('Failed to load sky environment.', error)
@@ -384,30 +355,27 @@ function TerrainWorld({
   }, [debugSettings.lighting, getThreeState, skyEnvironment])
 
   useEffect(() => {
-    terrainChunksRef.current = terrainChunks
-  }, [terrainChunks])
-
-  useEffect(() => {
     onReadyChange?.(isSceneReady)
   }, [isSceneReady, onReadyChange])
 
   useEffect(() => {
-    const lodCounts = Object.values(terrainChunks).reduce<
-      Record<number, number>
-    >((counts, terrainChunk) => {
-      counts[terrainChunk.lodLevel] = (counts[terrainChunk.lodLevel] ?? 0) + 1
-      return counts
-    }, {})
+    const lodCounts = activeTerrainChunks.reduce<Record<number, number>>(
+      (counts, terrainChunk) => {
+        counts[terrainChunk.lodLevel] = (counts[terrainChunk.lodLevel] ?? 0) + 1
+        return counts
+      },
+      {}
+    )
     const debugState: TerrainSceneDebugState = {
       cameraFocusWorld,
       cameraMode,
-      chunkCount: Object.keys(terrainChunks).length,
+      chunkCount: activeTerrainChunks.length,
       lodCounts,
-      sharedBufferChunks: Object.values(terrainChunks).filter(
+      sharedBufferChunks: activeTerrainChunks.filter(
         (terrainChunk) => terrainChunk.sharedArrayBufferBacked
       ).length,
       treeCount: treeCountSnapshot,
-      triangleCount: Object.values(terrainChunks).reduce(
+      triangleCount: activeTerrainChunks.reduce(
         (triangleTotal, terrainChunk) =>
           triangleTotal + (terrainChunk.geometry.index?.count ?? 0) / 3,
         0
@@ -430,216 +398,12 @@ function TerrainWorld({
       ).__terrainDebug
     }
   }, [
+    activeTerrainChunks,
     cameraFocusWorld,
     cameraMode,
     onDebugStateChange,
-    terrainChunks,
     treeCountSnapshot,
     worldOriginSnapshot,
-  ])
-
-  useEffect(() => {
-    const snowStates = snowStateLookupRef.current
-    const workerPool = new TerrainChunkWorkerPool()
-    workerPoolRef.current = workerPool
-
-    return () => {
-      workerPoolRef.current = null
-      workerPool.destroy()
-
-      for (const terrainChunk of Object.values(terrainChunksRef.current)) {
-        terrainChunk.geometry.dispose()
-      }
-
-      snowStates.clear()
-    }
-  }, [])
-
-  useEffect(() => {
-    desiredChunkLookupRef.current = new Map(
-      desiredChunkDescriptors.map((terrainChunk) => [
-        terrainChunk.key,
-        terrainChunk,
-      ])
-    )
-    desiredEdgeMorphLookupRef.current = new Map(
-      desiredChunkDescriptors.map((terrainChunk) => [
-        terrainChunk.key,
-        desiredEdgeMorphs.get(terrainChunk.key) ?? ZERO_EDGE_MORPH,
-      ])
-    )
-
-    setTerrainChunks((currentTerrainChunks) => {
-      const nextTerrainChunks = { ...currentTerrainChunks }
-
-      for (const terrainChunkKey of Object.keys(nextTerrainChunks)) {
-        if (desiredChunkLookupRef.current.has(terrainChunkKey)) {
-          continue
-        }
-
-        nextTerrainChunks[terrainChunkKey]?.geometry.dispose()
-        delete nextTerrainChunks[terrainChunkKey]
-        inflightChunkLookupRef.current.delete(terrainChunkKey)
-        snowStateLookupRef.current.delete(terrainChunkKey)
-      }
-
-      terrainChunksRef.current = nextTerrainChunks
-      return nextTerrainChunks
-    })
-
-    const workerPool = workerPoolRef.current
-
-    if (!workerPool) {
-      return
-    }
-
-    const prioritizedChunks = [...desiredChunkDescriptors].sort(
-      (left, right) => {
-        if (left.lodLevel !== right.lodLevel) {
-          return left.lodLevel - right.lodLevel
-        }
-
-        return (
-          getDistance(cameraFocusWorld, left.sphereCenter) -
-          getDistance(cameraFocusWorld, right.sphereCenter)
-        )
-      }
-    )
-
-    for (const terrainChunk of prioritizedChunks) {
-      const edgeMorph =
-        desiredEdgeMorphLookupRef.current.get(terrainChunk.key) ??
-        ZERO_EDGE_MORPH
-      const activeChunk = terrainChunksRef.current[terrainChunk.key]
-      const requestSignature = getChunkRequestSignature(
-        terrainChunk.resolution,
-        edgeMorph,
-        terrainGenerationSignature
-      )
-      const inflightSignature = inflightChunkLookupRef.current.get(
-        terrainChunk.key
-      )
-
-      if (
-        activeChunk?.resolution === terrainChunk.resolution &&
-        edgeMorphEquals(activeChunk.edgeMorph, edgeMorph) &&
-        activeChunk.terrainGenerationSignature === terrainGenerationSignature
-      ) {
-        continue
-      }
-
-      if (inflightSignature === requestSignature) {
-        continue
-      }
-
-      inflightChunkLookupRef.current.set(terrainChunk.key, requestSignature)
-
-      const buildOrigin = toOriginTuple(worldOriginRef.current)
-
-      workerPool
-        .requestChunk({
-          centerX: terrainChunk.centerX,
-          centerY: terrainChunk.centerY,
-          edgeMorph,
-          face: terrainChunk.face,
-          mode: 'planet',
-          origin: buildOrigin,
-          planetRadius: PLANET_RADIUS,
-          resolution: terrainChunk.resolution,
-          size: terrainChunk.size,
-          skirtDepth: PLANET_CHUNK_SKIRT_DEPTH,
-          terrainSettings: debugSettings.terrainGeneration,
-        })
-        .then((chunkBuffers) => {
-          if (
-            inflightChunkLookupRef.current.get(terrainChunk.key) !==
-            requestSignature
-          ) {
-            return
-          }
-
-          inflightChunkLookupRef.current.delete(terrainChunk.key)
-
-          const desiredChunk = desiredChunkLookupRef.current.get(
-            terrainChunk.key
-          )
-          const desiredEdgeMorph =
-            desiredEdgeMorphLookupRef.current.get(terrainChunk.key) ??
-            ZERO_EDGE_MORPH
-
-          if (
-            !desiredChunk ||
-            desiredChunk.resolution !== terrainChunk.resolution ||
-            !edgeMorphEquals(desiredEdgeMorph, edgeMorph)
-          ) {
-            return
-          }
-
-          const geometry = createTerrainChunkGeometry(chunkBuffers)
-          const snowState = createSnowAccumulationRuntimeState({
-            accumulation: chunkBuffers.snowCoverage,
-            key: terrainChunk.key,
-            settingsVersion: terrainGenerationSignature,
-            support: chunkBuffers.snowSupport,
-            terrainCoords: chunkBuffers.terrainCoords,
-            terrainHeights: chunkBuffers.terrainHeights,
-            vertexCount: chunkBuffers.terrainHeights.length,
-          })
-
-          geometry.setAttribute('snowCoverage', snowState.accumulationAttribute)
-
-          setTerrainChunks((currentTerrainChunks) => {
-            const currentChunk = currentTerrainChunks[terrainChunk.key]
-
-            if (
-              currentChunk?.resolution === desiredChunk.resolution &&
-              edgeMorphEquals(currentChunk.edgeMorph, desiredEdgeMorph) &&
-              currentChunk.terrainGenerationSignature ===
-                terrainGenerationSignature
-            ) {
-              geometry.dispose()
-              return currentTerrainChunks
-            }
-
-            currentChunk?.geometry.dispose()
-            snowStateLookupRef.current.delete(terrainChunk.key)
-            snowStateLookupRef.current.set(terrainChunk.key, snowState)
-
-            const nextTerrainChunks = {
-              ...currentTerrainChunks,
-              [terrainChunk.key]: {
-                ...desiredChunk,
-                buildOrigin,
-                edgeMorph: desiredEdgeMorph,
-                geometry,
-                sharedArrayBufferBacked: isSharedArrayBuffer(
-                  chunkBuffers.positions.buffer
-                ),
-                stats: chunkBuffers.stats,
-                terrainGenerationSignature,
-              },
-            }
-
-            terrainChunksRef.current = nextTerrainChunks
-            return nextTerrainChunks
-          })
-        })
-        .catch((error: unknown) => {
-          if (
-            inflightChunkLookupRef.current.get(terrainChunk.key) ===
-            requestSignature
-          ) {
-            inflightChunkLookupRef.current.delete(terrainChunk.key)
-          }
-          console.error('Failed to build terrain chunk in worker.', error)
-        })
-    }
-  }, [
-    cameraFocusWorld,
-    debugSettings.terrainGeneration,
-    desiredChunkDescriptors,
-    desiredEdgeMorphs,
-    terrainGenerationSignature,
   ])
 
   useFrame((_, deltaTimeSeconds) => {
@@ -663,8 +427,17 @@ function TerrainWorld({
     const renderer = gl as unknown as WebGPURenderer
 
     snowSimulationAccumulatorRef.current = 0
+    snowSimulationTimeRef.current += simulationDeltaSeconds
 
-    for (const [terrainChunkKey, snowState] of snowStates) {
+    const selectedSnowChunks = takeSnowChunksForSimulation(
+      snowStates,
+      snowSimulationCursorRef.current,
+      MAX_SNOW_CHUNKS_PER_STEP
+    )
+
+    snowSimulationCursorRef.current = selectedSnowChunks.nextIndex
+
+    for (const [terrainChunkKey, snowState] of selectedSnowChunks.items) {
       const terrainChunk = terrainChunksRef.current[terrainChunkKey]
 
       if (
@@ -675,10 +448,19 @@ function TerrainWorld({
         continue
       }
 
+      const chunkDeltaSeconds = Math.min(
+        Math.max(0, snowSimulationTimeRef.current - snowState.lastUpdateTime),
+        1.5
+      )
+
+      if (chunkDeltaSeconds <= 0) {
+        continue
+      }
+
       updateSnowAccumulationRuntimeState(
         renderer,
         snowState,
-        simulationDeltaSeconds,
+        chunkDeltaSeconds,
         snowfallIntensity,
         snowAccumulationSettings
       )
@@ -734,7 +516,7 @@ function TerrainWorld({
           <sphereGeometry args={[PLANET_RADIUS - 24, 48, 28]} />
           <meshStandardMaterial color="#0e151c" roughness={1} />
         </mesh>
-        {Object.values(terrainChunks).map((terrainChunk) => (
+        {activeTerrainChunks.map((terrainChunk) => (
           <mesh
             geometry={terrainChunk.geometry}
             key={terrainChunk.key}
@@ -752,10 +534,8 @@ function TerrainWorld({
           </mesh>
         ))}
         <TerrainTrees
-          chunks={Object.values(terrainChunks)}
-          onTreeCountChange={(treeCount) => {
-            setTreeCountSnapshot(treeCount)
-          }}
+          chunks={activeTerrainChunks}
+          onTreeCountChange={setTreeCountSnapshot}
           terrainSettings={debugSettings.terrainGeneration}
           vegetationSettings={debugSettings.vegetation}
         />

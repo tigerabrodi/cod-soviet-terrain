@@ -1,5 +1,6 @@
 import { useThree } from '@react-three/fiber'
 import {
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -44,7 +45,7 @@ export interface TerrainTreesProps {
   vegetationSettings: DeadTreeSettings
 }
 
-export function TerrainTrees({
+export const TerrainTrees = memo(function TerrainTrees({
   chunks,
   onTreeCountChange,
   terrainSettings,
@@ -82,7 +83,11 @@ export function TerrainTrees({
           }),
         }))
         .filter(({ instances }) => instances.count > 0),
-    [terrainSettings, vegetationSettings, visibleChunks]
+    [
+      terrainSettings,
+      vegetationSettings,
+      visibleChunks,
+    ]
   )
   const totalTreeCount = useMemo(
     () =>
@@ -144,7 +149,7 @@ export function TerrainTrees({
       ))}
     </>
   )
-}
+})
 
 function TerrainTreeChunk({
   chunk,
