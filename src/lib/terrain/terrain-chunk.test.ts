@@ -6,6 +6,7 @@ import {
   generateTerrainChunkBuffers,
   sampleTerrainHeight,
 } from './terrain-chunk'
+import { DEFAULT_TERRAIN_GENERATION_SETTINGS } from './terrain-settings'
 
 describe('computeSplatWeights', () => {
   it('prefers scorched ground for low flat terrain', () => {
@@ -42,6 +43,19 @@ describe('sampleTerrainHeight', () => {
     expect(sampleTerrainHeight(0, 0)).toBeCloseTo(4.156113335342688, 8)
     expect(sampleTerrainHeight(24, -18)).toBeCloseTo(8.909805586277777, 8)
     expect(sampleTerrainHeight(-57, 61)).toBeCloseTo(6.620292877085063, 8)
+  })
+
+  it('applies generation settings to amplify terrain relief', () => {
+    const terrainBaseline = 12
+    const defaultHeight = sampleTerrainHeight(24, -18)
+    const amplifiedHeight = sampleTerrainHeight(24, -18, {
+      ...DEFAULT_TERRAIN_GENERATION_SETTINGS,
+      heightScale: 1.5,
+    })
+
+    expect(Math.abs(amplifiedHeight - terrainBaseline)).toBeGreaterThan(
+      Math.abs(defaultHeight - terrainBaseline)
+    )
   })
 })
 

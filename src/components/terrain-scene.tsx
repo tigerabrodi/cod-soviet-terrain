@@ -1,13 +1,17 @@
 import { FlyCameraController } from '@/components/fly-camera-controller'
 import { SnowParticles } from '@/components/snow-particles'
 import { createInitialFlyCameraState } from '@/lib/camera/fly-camera'
+import type { TerrainDebugSettings } from '@/lib/debug/terrain-debug'
 import { isSharedArrayBuffer } from '@/lib/shared/shared-array-buffer'
 import {
   createTerrainChunkGeometry,
   samplePlanetTerrainHeight,
   type TerrainChunkStats,
 } from '@/lib/terrain/terrain-chunk'
-import { createTerrainMaterial } from '@/lib/terrain/terrain-material'
+import {
+  createTerrainMaterial,
+  type TerrainMaterialSettings,
+} from '@/lib/terrain/terrain-material'
 import {
   PLANET_RADIUS,
   getPlanetChunkEdgeMorphs,
@@ -16,8 +20,12 @@ import {
   type TerrainChunkEdgeMorph,
   type Vec3Like,
 } from '@/lib/terrain/terrain-planet'
-import { loadTerrainTextureSet } from '@/lib/terrain/terrain-textures'
+import {
+  loadTerrainTextureSet,
+  type TerrainTextureSet,
+} from '@/lib/terrain/terrain-textures'
 import { TerrainChunkWorkerPool } from '@/lib/terrain/terrain-worker-pool'
+import { createTerrainGenerationSignature } from '@/lib/terrain/terrain-settings'
 import { createSkyDomeGeometry } from '@/lib/sky/sky-dome'
 import { loadSkyEnvironment } from '@/lib/sky/sky-environment'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
@@ -50,11 +58,23 @@ type TerrainRendererProps = NonNullable<
 
 export interface TerrainSceneProps {
   cameraMode: CameraMode
+  debugSettings: TerrainDebugSettings
   onBackendChange?: (backend: string) => void
+  onDebugStateChange?: (debugState: TerrainSceneDebugState) => void
   onReadyChange?: (ready: boolean) => void
 }
 
 export type CameraMode = 'fly' | 'orbit'
+
+export interface TerrainSceneDebugState {
+  cameraFocusWorld: Vec3Like
+  cameraMode: CameraMode
+  chunkCount: number
+  lodCounts: Record<number, number>
+  sharedBufferChunks: number
+  triangleCount: number
+  worldOrigin: Vec3Like
+}
 
 interface TerrainChunkRuntime extends PlanetChunkDescriptor {
   buildOrigin: readonly [number, number, number]
@@ -62,6 +82,7 @@ interface TerrainChunkRuntime extends PlanetChunkDescriptor {
   geometry: ReturnType<typeof createTerrainChunkGeometry>
   sharedArrayBufferBacked: boolean
   stats: TerrainChunkStats
+  terrainGenerationSignature: string
 }
 
 const PLANET_LOD_RESOLUTIONS = [64, 32, 16] as const
@@ -79,7 +100,9 @@ const ZERO_VECTOR = { x: 0, y: 0, z: 0 } as const
 
 export function TerrainScene({
   cameraMode,
+  debugSettings,
   onBackendChange,
+  onDebugStateChange,
   onReadyChange,
 }: TerrainSceneProps) {
   return (
@@ -98,7 +121,9 @@ export function TerrainScene({
       <color attach="background" args={['#081018']} />
       <TerrainWorld
         cameraMode={cameraMode}
+        debugSettings={debugSettings}
         onBackendChange={onBackendChange}
+        onDebugStateChange={onDebugStateChange}
         onReadyChange={onReadyChange}
       />
     </Canvas>
@@ -125,20 +150,22 @@ async function createTerrainRenderer(defaultProps: unknown) {
 
 function TerrainWorld({
   cameraMode,
+  debugSettings,
   onBackendChange,
+  onDebugStateChange,
   onReadyChange,
 }: TerrainSceneProps) {
   const camera = useThree((state) => state.camera)
   const gl = useThree((state) => state.gl)
   const getThreeState = useThree((state) => state.get)
 
-  const [isMaterialReady, setIsMaterialReady] = useState(false)
-  const [isSkyReady, setIsSkyReady] = useState(false)
   const [terrainChunks, setTerrainChunks] = useState<
     Record<string, TerrainChunkRuntime>
   >({})
-  const [terrainMaterial, setTerrainMaterial] = useState<ReturnType<
-    typeof createTerrainMaterial
+  const [terrainTextures, setTerrainTextures] =
+    useState<TerrainTextureSet | null>(null)
+  const [skyEnvironment, setSkyEnvironment] = useState<Awaited<
+    ReturnType<typeof loadSkyEnvironment>
   > | null>(null)
   const [worldOriginSnapshot, setWorldOriginSnapshot] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).worldOrigin
@@ -146,11 +173,27 @@ function TerrainWorld({
   const [cameraFocusWorld, setCameraFocusWorld] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).cameraFocusWorld
   )
-  const skyDomeGeometry = useMemo(() => createSkyDomeGeometry(), [])
-  const planetBackdropGeometry = useMemo(
-    () => createPlanetBackdropGeometry(),
-    []
+  const terrainGenerationSignature = useMemo(
+    () => createTerrainGenerationSignature(debugSettings.terrainGeneration),
+    [debugSettings.terrainGeneration]
   )
+  const skyDomeGeometry = useMemo(() => createSkyDomeGeometry(), [])
+  const terrainMaterial = useMemo(
+    () =>
+      terrainTextures
+        ? createTerrainMaterial(
+            terrainTextures,
+            debugSettings.terrainMaterial as TerrainMaterialSettings
+          )
+        : null,
+    [debugSettings.terrainMaterial, terrainTextures]
+  )
+  const planetBackdropGeometry = useMemo(
+    () => createPlanetBackdropGeometry(debugSettings.terrainGeneration),
+    [debugSettings.terrainGeneration]
+  )
+  const isMaterialReady = terrainMaterial !== null
+  const isSkyReady = skyEnvironment !== null
 
   const desiredChunkDescriptors = useMemo(
     () =>
@@ -181,7 +224,8 @@ function TerrainWorld({
 
     return (
       activeChunk?.resolution === terrainChunk.resolution &&
-      edgeMorphEquals(activeChunk.edgeMorph, desiredEdgeMorph)
+      edgeMorphEquals(activeChunk.edgeMorph, desiredEdgeMorph) &&
+      activeChunk.terrainGenerationSignature === terrainGenerationSignature
     )
   })
   const isSceneReady = isMaterialReady && isSkyReady && isTerrainWindowReady
@@ -228,9 +272,7 @@ function TerrainWorld({
           return
         }
 
-        const nextMaterial = createTerrainMaterial(textures)
-        setTerrainMaterial(nextMaterial)
-        setIsMaterialReady(true)
+        setTerrainTextures(textures)
       })
       .catch((error: unknown) => {
         console.error('Failed to load terrain textures.', error)
@@ -242,7 +284,34 @@ function TerrainWorld({
   }, [gl])
 
   useEffect(() => {
+    return () => {
+      terrainMaterial?.dispose()
+    }
+  }, [terrainMaterial])
+
+  useEffect(() => {
     let isMounted = true
+
+    loadSkyEnvironment(
+      gl as unknown as Parameters<typeof loadSkyEnvironment>[0]
+    )
+      .then((nextSkyEnvironment) => {
+        if (!isMounted) {
+          return
+        }
+
+        setSkyEnvironment(nextSkyEnvironment)
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to load sky environment.', error)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [gl])
+
+  useEffect(() => {
     const currentScene = getThreeState().scene
     const previousBackground = currentScene.background
     const previousEnvironment = currentScene.environment
@@ -255,34 +324,16 @@ function TerrainWorld({
     currentScene.background = new Color('#8a9298')
     currentScene.backgroundIntensity = 1
     currentScene.backgroundBlurriness = 0
-    currentScene.environmentIntensity = 0.6
-    currentScene.fog = new FogExp2('#95a1ab', 0.00048)
-
-    loadSkyEnvironment(
-      gl as unknown as Parameters<typeof loadSkyEnvironment>[0]
+    currentScene.environment = skyEnvironment?.environment ?? null
+    currentScene.environmentIntensity =
+      0.78 * debugSettings.lighting.environmentIntensity
+    currentScene.environmentRotation.copy(new Euler(-0.24, Math.PI * 0.58, 0))
+    currentScene.fog = new FogExp2(
+      '#95a1ab',
+      0.00048 * debugSettings.lighting.fogDensity
     )
-      .then((skyEnvironment) => {
-        if (!isMounted) {
-          return
-        }
-
-        currentScene.background = new Color('#8a9298')
-        currentScene.backgroundIntensity = 1
-        currentScene.backgroundBlurriness = 0
-        currentScene.environment = skyEnvironment.environment
-        currentScene.environmentIntensity = 0.78
-        currentScene.environmentRotation.copy(
-          new Euler(-0.24, Math.PI * 0.58, 0)
-        )
-        currentScene.fog = new FogExp2('#95a1ab', 0.00048)
-        setIsSkyReady(true)
-      })
-      .catch((error: unknown) => {
-        console.error('Failed to load sky environment.', error)
-      })
 
     return () => {
-      isMounted = false
       currentScene.background = previousBackground
       currentScene.environment = previousEnvironment
       currentScene.fog = previousFog
@@ -291,7 +342,7 @@ function TerrainWorld({
       currentScene.environmentIntensity = previousEnvironmentIntensity
       currentScene.environmentRotation.copy(previousEnvironmentRotation)
     }
-  }, [getThreeState, gl])
+  }, [debugSettings.lighting, getThreeState, skyEnvironment])
 
   useEffect(() => {
     terrainChunksRef.current = terrainChunks
@@ -302,13 +353,25 @@ function TerrainWorld({
   }, [isSceneReady, onReadyChange])
 
   useEffect(() => {
-    const debugState = {
+    const lodCounts = Object.values(terrainChunks).reduce<
+      Record<number, number>
+    >((counts, terrainChunk) => {
+      counts[terrainChunk.lodLevel] = (counts[terrainChunk.lodLevel] ?? 0) + 1
+      return counts
+    }, {})
+    const debugState: TerrainSceneDebugState = {
       cameraFocusWorld,
       cameraMode,
       chunkCount: Object.keys(terrainChunks).length,
+      lodCounts,
       sharedBufferChunks: Object.values(terrainChunks).filter(
         (terrainChunk) => terrainChunk.sharedArrayBufferBacked
       ).length,
+      triangleCount: Object.values(terrainChunks).reduce(
+        (triangleTotal, terrainChunk) =>
+          triangleTotal + (terrainChunk.geometry.index?.count ?? 0) / 3,
+        0
+      ),
       worldOrigin: worldOriginSnapshot,
     }
 
@@ -317,6 +380,7 @@ function TerrainWorld({
         __terrainDebug?: typeof debugState
       }
     ).__terrainDebug = debugState
+    onDebugStateChange?.(debugState)
 
     return () => {
       delete (
@@ -325,7 +389,13 @@ function TerrainWorld({
         }
       ).__terrainDebug
     }
-  }, [cameraFocusWorld, cameraMode, terrainChunks, worldOriginSnapshot])
+  }, [
+    cameraFocusWorld,
+    cameraMode,
+    onDebugStateChange,
+    terrainChunks,
+    worldOriginSnapshot,
+  ])
 
   useEffect(() => {
     const workerPool = new TerrainChunkWorkerPool()
@@ -398,7 +468,8 @@ function TerrainWorld({
       const activeChunk = terrainChunksRef.current[terrainChunk.key]
       const requestSignature = getChunkRequestSignature(
         terrainChunk.resolution,
-        edgeMorph
+        edgeMorph,
+        terrainGenerationSignature
       )
       const inflightSignature = inflightChunkLookupRef.current.get(
         terrainChunk.key
@@ -406,7 +477,8 @@ function TerrainWorld({
 
       if (
         activeChunk?.resolution === terrainChunk.resolution &&
-        edgeMorphEquals(activeChunk.edgeMorph, edgeMorph)
+        edgeMorphEquals(activeChunk.edgeMorph, edgeMorph) &&
+        activeChunk.terrainGenerationSignature === terrainGenerationSignature
       ) {
         continue
       }
@@ -431,8 +503,16 @@ function TerrainWorld({
           resolution: terrainChunk.resolution,
           size: terrainChunk.size,
           skirtDepth: PLANET_CHUNK_SKIRT_DEPTH,
+          terrainSettings: debugSettings.terrainGeneration,
         })
         .then((chunkBuffers) => {
+          if (
+            inflightChunkLookupRef.current.get(terrainChunk.key) !==
+            requestSignature
+          ) {
+            return
+          }
+
           inflightChunkLookupRef.current.delete(terrainChunk.key)
 
           const desiredChunk = desiredChunkLookupRef.current.get(
@@ -457,7 +537,9 @@ function TerrainWorld({
 
             if (
               currentChunk?.resolution === desiredChunk.resolution &&
-              edgeMorphEquals(currentChunk.edgeMorph, desiredEdgeMorph)
+              edgeMorphEquals(currentChunk.edgeMorph, desiredEdgeMorph) &&
+              currentChunk.terrainGenerationSignature ===
+                terrainGenerationSignature
             ) {
               geometry.dispose()
               return currentTerrainChunks
@@ -476,6 +558,7 @@ function TerrainWorld({
                   chunkBuffers.positions.buffer
                 ),
                 stats: chunkBuffers.stats,
+                terrainGenerationSignature,
               },
             }
 
@@ -484,33 +567,59 @@ function TerrainWorld({
           })
         })
         .catch((error: unknown) => {
-          inflightChunkLookupRef.current.delete(terrainChunk.key)
+          if (
+            inflightChunkLookupRef.current.get(terrainChunk.key) ===
+            requestSignature
+          ) {
+            inflightChunkLookupRef.current.delete(terrainChunk.key)
+          }
           console.error('Failed to build terrain chunk in worker.', error)
         })
     }
-  }, [cameraFocusWorld, desiredChunkDescriptors, desiredEdgeMorphs])
+  }, [
+    cameraFocusWorld,
+    debugSettings.terrainGeneration,
+    desiredChunkDescriptors,
+    desiredEdgeMorphs,
+    terrainGenerationSignature,
+  ])
 
   useEffect(() => {
     return () => {
       skyDomeGeometry.dispose()
-      planetBackdropGeometry.dispose()
-      terrainMaterial?.dispose()
     }
-  }, [planetBackdropGeometry, skyDomeGeometry, terrainMaterial])
+  }, [skyDomeGeometry])
+
+  useEffect(() => {
+    return () => {
+      planetBackdropGeometry.dispose()
+    }
+  }, [planetBackdropGeometry])
 
   return (
     <>
       <SkyDome geometry={skyDomeGeometry} />
-      <SnowParticles />
-      <ambientLight intensity={0.08} />
+      <SnowParticles
+        density={debugSettings.weather.snowDensity}
+        driftStrength={debugSettings.weather.driftStrength}
+        enabled={debugSettings.weather.snowEnabled}
+        fallSpeed={debugSettings.weather.fallSpeed}
+      />
+      <ambientLight
+        intensity={0.08 * debugSettings.lighting.environmentIntensity}
+      />
       <hemisphereLight
-        args={['#bfd0df', '#342821', 0.7]}
+        args={[
+          '#bfd0df',
+          '#342821',
+          0.7 * debugSettings.lighting.environmentIntensity,
+        ]}
         groundColor="#342821"
       />
       <directionalLight
         castShadow
         color="#ffd7b1"
-        intensity={2.15}
+        intensity={2.15 * debugSettings.lighting.sunIntensity}
         position={[-540, 260, 420]}
         shadow-bias={-0.00008}
         shadow-mapSize-height={2048}
@@ -553,9 +662,9 @@ function TerrainWorld({
       ) : (
         <FlyCameraController
           focusRefreshDistance={FOCUS_REFRESH_DISTANCE}
-          initialState={INITIAL_FLY_CAMERA_STATE}
           onCameraFocusWorldChange={setCameraFocusWorld}
           onWorldOriginSnapshotChange={setWorldOriginSnapshot}
+          terrainSettings={debugSettings.terrainGeneration}
           worldOriginRef={worldOriginRef}
         />
       )}
@@ -685,9 +794,10 @@ function edgeMorphEquals(
 
 function getChunkRequestSignature(
   resolution: number,
-  edgeMorph: TerrainChunkEdgeMorph
+  edgeMorph: TerrainChunkEdgeMorph,
+  terrainGenerationSignature: string
 ) {
-  return `${resolution}:${edgeMorph.east}:${edgeMorph.north}:${edgeMorph.south}:${edgeMorph.west}`
+  return `${resolution}:${edgeMorph.east}:${edgeMorph.north}:${edgeMorph.south}:${edgeMorph.west}:${terrainGenerationSignature}`
 }
 
 function getModeSetup(cameraMode: CameraMode) {
@@ -755,7 +865,9 @@ function toOriginTuple(vector: Vec3Like): readonly [number, number, number] {
   return [vector.x, vector.y, vector.z]
 }
 
-function createPlanetBackdropGeometry() {
+function createPlanetBackdropGeometry(
+  terrainSettings: TerrainSceneProps['debugSettings']['terrainGeneration']
+) {
   const geometry = new SphereGeometry(PLANET_RADIUS - 8, 72, 44)
   const positions = geometry.getAttribute('position')
 
@@ -772,7 +884,8 @@ function createPlanetBackdropGeometry() {
     const height = samplePlanetTerrainHeight(
       up.x * PLANET_RADIUS,
       up.y * PLANET_RADIUS,
-      up.z * PLANET_RADIUS
+      up.z * PLANET_RADIUS,
+      terrainSettings
     )
     const radius = PLANET_RADIUS + height - 10
 

@@ -4,6 +4,7 @@ import {
   stepFlyCamera,
   type FlyCameraState,
 } from '@/lib/camera/fly-camera'
+import type { TerrainGenerationSettings } from '@/lib/terrain/terrain-settings'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { Camera } from 'three'
@@ -14,20 +15,25 @@ export interface FlyCameraControllerProps {
   initialState?: FlyCameraState
   onCameraFocusWorldChange: (cameraFocusWorld: Vec3Like) => void
   onWorldOriginSnapshotChange: (worldOrigin: Vec3Like) => void
+  terrainSettings?: TerrainGenerationSettings
   worldOriginRef: MutableRefObject<Vec3Like>
 }
 
 export function FlyCameraController({
   focusRefreshDistance,
-  initialState = createInitialFlyCameraState(),
+  initialState,
   onCameraFocusWorldChange,
   onWorldOriginSnapshotChange,
+  terrainSettings,
   worldOriginRef,
 }: FlyCameraControllerProps) {
   const camera = useThree((state) => state.camera)
   const gl = useThree((state) => state.gl)
-  const flyStateRef = useRef<FlyCameraState>(initialState)
-  const focusWorldRef = useRef<Vec3Like>(initialState.position)
+  const spawnState =
+    initialState ?? createInitialFlyCameraState(terrainSettings)
+  const initialFlyStateRef = useRef<FlyCameraState>(spawnState)
+  const flyStateRef = useRef<FlyCameraState>(spawnState)
+  const focusWorldRef = useRef<Vec3Like>(spawnState.position)
   const keyStateRef = useRef({
     KeyA: false,
     KeyD: false,
@@ -41,15 +47,16 @@ export function FlyCameraController({
   const pointerLockedRef = useRef(false)
 
   useEffect(() => {
-    flyStateRef.current = initialState
-    focusWorldRef.current = initialState.position
-    worldOriginRef.current = initialState.position
-    onWorldOriginSnapshotChange(initialState.position)
-    onCameraFocusWorldChange(initialState.position)
-    syncCameraFromFlyState(camera, initialState)
+    const spawnState = initialFlyStateRef.current
+
+    flyStateRef.current = spawnState
+    focusWorldRef.current = spawnState.position
+    worldOriginRef.current = spawnState.position
+    onWorldOriginSnapshotChange(spawnState.position)
+    onCameraFocusWorldChange(spawnState.position)
+    syncCameraFromFlyState(camera, spawnState)
   }, [
     camera,
-    initialState,
     onCameraFocusWorldChange,
     onWorldOriginSnapshotChange,
     worldOriginRef,
@@ -140,7 +147,8 @@ export function FlyCameraController({
     flyStateRef.current = stepFlyCamera(
       flyStateRef.current,
       input,
-      deltaSeconds
+      deltaSeconds,
+      terrainSettings
     )
     worldOriginRef.current = flyStateRef.current.position
     syncCameraFromFlyState(camera, flyStateRef.current)

@@ -12,6 +12,7 @@ This component is the live bridge between the pure terrain systems and the runni
 - Snow and sky scene integration.
 - Floating origin display offset.
 - Small browser debug helpers.
+- Runtime debug settings from the overlay panel.
 
 ## Why it is structured this way
 
@@ -19,6 +20,7 @@ This component is the live bridge between the pure terrain systems and the runni
 - The fly controller math lives in `src/lib/camera`. That keeps camera feel work separate from terrain streaming.
 - The scene layer only handles integration. loading. mesh lifetime. camera hookup. and runtime checks.
 - The world render offset lives in a single group. That lets the fly camera move without forcing every terrain mesh prop to be recomputed through React on every frame.
+- The scene exports a compact debug state with chunk count. triangle count. LOD split. and SharedArrayBuffer usage so the UI can teach what the renderer is doing.
 
 ## Camera modes
 
@@ -39,4 +41,4 @@ This component is the live bridge between the pure terrain systems and the runni
 
 `window.__terrainDebug` is intentionally small.
 
-It exists so we can verify chunk count. SharedArrayBuffer usage. current camera mode. and the last streamed world focus point in a real browser session.
+It exists so we can verify chunk count. triangle count. LOD split. SharedArrayBuffer usage. current camera mode. and the last streamed world focus point in a real browser session.

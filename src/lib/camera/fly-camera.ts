@@ -1,5 +1,9 @@
 import { samplePlanetTerrainHeight } from '@/lib/terrain/terrain-chunk'
 import { PLANET_RADIUS, type Vec3Like } from '@/lib/terrain/terrain-planet'
+import {
+  DEFAULT_TERRAIN_GENERATION_SETTINGS,
+  type TerrainGenerationSettings,
+} from '@/lib/terrain/terrain-settings'
 
 export interface FlyCameraState {
   forward: Vec3Like
@@ -29,7 +33,9 @@ const DEFAULT_ACCELERATION = 9
 const DEFAULT_DECELERATION = 11
 const DEFAULT_SPAWN_CLEARANCE = 18
 
-export function createInitialFlyCameraState(): FlyCameraState {
+export function createInitialFlyCameraState(
+  terrainSettings: TerrainGenerationSettings = DEFAULT_TERRAIN_GENERATION_SETTINGS
+): FlyCameraState {
   const spawnDirection = normalize({
     x: 0.28,
     y: 0.34,
@@ -38,7 +44,8 @@ export function createInitialFlyCameraState(): FlyCameraState {
   const spawnHeight = samplePlanetTerrainHeight(
     spawnDirection.x * PLANET_RADIUS,
     spawnDirection.y * PLANET_RADIUS,
-    spawnDirection.z * PLANET_RADIUS
+    spawnDirection.z * PLANET_RADIUS,
+    terrainSettings
   )
   const spawnPosition = scaleVec3(
     spawnDirection,
@@ -87,7 +94,8 @@ export function applyFlyLook(
 export function stepFlyCamera(
   state: FlyCameraState,
   input: FlyControlInput,
-  deltaSeconds: number
+  deltaSeconds: number,
+  terrainSettings: TerrainGenerationSettings = DEFAULT_TERRAIN_GENERATION_SETTINGS
 ): FlyCameraState {
   const safeDeltaSeconds = Math.min(Math.max(deltaSeconds, 1 / 240), 1 / 12)
   const up = normalize(state.position)
@@ -120,7 +128,11 @@ export function stepFlyCamera(
     )
   const velocity = lerpVec3(state.velocity, targetVelocity, blend)
   let position = addVec3(state.position, scaleVec3(velocity, safeDeltaSeconds))
-  const liftedPosition = keepPointAboveTerrain(position, DEFAULT_FLY_CLEARANCE)
+  const liftedPosition = keepPointAboveTerrain(
+    position,
+    DEFAULT_FLY_CLEARANCE,
+    terrainSettings
+  )
   const radialShift = subtractVec3(liftedPosition, position)
   position = liftedPosition
 
@@ -140,7 +152,11 @@ export function stepFlyCamera(
   }
 }
 
-function keepPointAboveTerrain(point: Vec3Like, clearance: number) {
+function keepPointAboveTerrain(
+  point: Vec3Like,
+  clearance: number,
+  terrainSettings: TerrainGenerationSettings
+) {
   const radius = lengthVec3(point) || 1
   const up = scaleVec3(point, 1 / radius)
   const terrainRadius =
@@ -148,7 +164,8 @@ function keepPointAboveTerrain(point: Vec3Like, clearance: number) {
     samplePlanetTerrainHeight(
       up.x * PLANET_RADIUS,
       up.y * PLANET_RADIUS,
-      up.z * PLANET_RADIUS
+      up.z * PLANET_RADIUS,
+      terrainSettings
     ) +
     clearance
 

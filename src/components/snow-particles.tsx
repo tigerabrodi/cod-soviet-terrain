@@ -21,24 +21,50 @@ import {
   vec3,
 } from 'three/tsl'
 import {
+  SNOW_PARTICLE_COUNT,
   buildSnowParticleAttributes,
   loadSnowflakeTexture,
   SNOW_VOLUME_HEIGHT,
-  type SnowParticleBuffers,
 } from '@/lib/weather/snow-particles'
+import type { SnowParticleBuffers } from '@/lib/weather/snow-particles'
 
 const TAU = float(Math.PI * 2)
 const WORLD_UP = new Vector3(0, 1, 0)
 const SNOW_UP = new Vector3()
 const SNOW_QUATERNION = new Quaternion()
 
-export function SnowParticles() {
+export interface SnowParticleDebugSettings {
+  density: number
+  driftStrength: number
+  enabled: boolean
+  fallSpeed: number
+}
+
+export function SnowParticles({
+  density,
+  driftStrength,
+  enabled,
+  fallSpeed,
+}: SnowParticleDebugSettings) {
   const camera = useThree((state) => state.camera)
   const gl = useThree((state) => state.gl)
-  const particleBuffers = useMemo(() => buildSnowParticleAttributes(), [])
+  const particleCount = useMemo(
+    () =>
+      enabled ? Math.max(0, Math.round(SNOW_PARTICLE_COUNT * density)) : 0,
+    [density, enabled]
+  )
+  const particleBuffers = useMemo(
+    () => buildSnowParticleAttributes(particleCount),
+    [particleCount]
+  )
   const [snowSprite, setSnowSprite] = useState<Sprite | null>(null)
+  const visibleSnowSprite = enabled && particleCount > 0 ? snowSprite : null
 
   useEffect(() => {
+    if (!enabled || particleCount <= 0) {
+      return
+    }
+
     let isMounted = true
     let mountedSprite: Sprite | null = null
 
@@ -48,7 +74,10 @@ export function SnowParticles() {
           return
         }
 
-        const sprite = createSnowSprite(particleBuffers, snowflakeTexture)
+        const sprite = createSnowSprite(particleBuffers, snowflakeTexture, {
+          driftStrength,
+          fallSpeed,
+        })
 
         mountedSprite = sprite
         setSnowSprite(sprite)
@@ -61,25 +90,26 @@ export function SnowParticles() {
       isMounted = false
       mountedSprite?.material.dispose()
     }
-  }, [gl, particleBuffers])
+  }, [driftStrength, enabled, fallSpeed, gl, particleBuffers, particleCount])
 
   useFrame(() => {
-    if (!snowSprite) {
+    if (!visibleSnowSprite) {
       return
     }
 
-    snowSprite.position.copy(camera.position)
+    visibleSnowSprite.position.copy(camera.position)
     SNOW_UP.copy(camera.up).normalize()
     SNOW_QUATERNION.setFromUnitVectors(WORLD_UP, SNOW_UP)
-    snowSprite.quaternion.copy(SNOW_QUATERNION)
+    visibleSnowSprite.quaternion.copy(SNOW_QUATERNION)
   })
 
-  return snowSprite ? <primitive object={snowSprite} /> : null
+  return visibleSnowSprite ? <primitive object={visibleSnowSprite} /> : null
 }
 
 function createSnowSprite(
   particleBuffers: SnowParticleBuffers,
-  snowflakeTexture: Awaited<ReturnType<typeof loadSnowflakeTexture>>
+  snowflakeTexture: Awaited<ReturnType<typeof loadSnowflakeTexture>>,
+  settings: Pick<SnowParticleDebugSettings, 'driftStrength' | 'fallSpeed'>
 ) {
   const anchorAttribute = new InstancedBufferAttribute(
     particleBuffers.anchorData,
@@ -96,13 +126,17 @@ function createSnowSprite(
   const anchorNode = instancedBufferAttribute(anchorAttribute, 'vec3')
   const configNode = instancedBufferAttribute(configAttribute, 'vec4')
   const rotationNode = instancedBufferAttribute(rotationAttribute, 'float')
-  const cycle = fract(time.mul(configNode.x).add(configNode.w))
+  const driftScale = float(settings.driftStrength)
+  const fallSpeedScale = float(settings.fallSpeed)
+  const cycle = fract(
+    time.mul(configNode.x).mul(fallSpeedScale).add(configNode.w)
+  )
   const driftX = sin(time.mul(configNode.y).add(configNode.w.mul(TAU))).mul(
-    configNode.z
+    configNode.z.mul(driftScale)
   )
   const driftZ = cos(
     time.mul(configNode.y.mul(0.82)).add(configNode.w.mul(TAU.mul(0.68)))
-  ).mul(configNode.z.mul(0.86))
+  ).mul(configNode.z.mul(driftScale).mul(0.86))
   const fallOffset = cycle.mul(float(SNOW_VOLUME_HEIGHT))
   const fallFade = smoothstep(float(0.04), float(0.18), cycle).mul(
     float(1).sub(smoothstep(float(0.78), float(1), cycle))

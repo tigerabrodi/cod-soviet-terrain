@@ -20,7 +20,17 @@ import {
 } from 'three/tsl'
 import type { TerrainTextureSet } from './terrain-textures'
 
-const TILE_SCALE = float(0.085)
+export interface TerrainMaterialSettings {
+  frostStrength: number
+  textureScale: number
+}
+
+export const DEFAULT_TERRAIN_MATERIAL_SETTINGS: TerrainMaterialSettings = {
+  frostStrength: 1,
+  textureScale: 1,
+}
+
+const DEFAULT_TILE_SCALE = float(0.085)
 const DETAIL_NORMAL_STRENGTH = float(0.6)
 const GEOMETRY_NORMAL_STRENGTH = float(0.4)
 const terrainCoords = attribute('terrainCoords', 'vec3')
@@ -42,7 +52,7 @@ const sampleTriplanarArray = Fn(
   ([
     textureNode,
     layerIndex,
-    scaleNode = TILE_SCALE,
+    scaleNode = DEFAULT_TILE_SCALE,
     positionNode = terrainCoords,
     surfaceNormal = normalLocal,
   ]) => {
@@ -69,7 +79,7 @@ const sampleTriplanarNormal = Fn(
   ([
     textureNode,
     layerIndex,
-    scaleNode = TILE_SCALE,
+    scaleNode = DEFAULT_TILE_SCALE,
     positionNode = terrainCoords,
     surfaceNormal = normalLocal,
   ]) => {
@@ -126,8 +136,14 @@ const sharpenSplatWeights = Fn(
   }
 )
 
-export function createTerrainMaterial(textures: TerrainTextureSet) {
+export function createTerrainMaterial(
+  textures: TerrainTextureSet,
+  settings: TerrainMaterialSettings = DEFAULT_TERRAIN_MATERIAL_SETTINGS
+) {
   const splatWeights = attribute('splatWeights', 'vec4')
+  const tileScale = float(0.085 * settings.textureScale)
+  const heightTileScale = tileScale.mul(0.9)
+  const normalTileScale = tileScale.mul(1.15)
 
   const baseColorTexture = texture(textures.basecolor)
   const normalTexture = texture(textures.normal)
@@ -140,26 +156,10 @@ export function createTerrainMaterial(textures: TerrainTextureSet) {
   const layer2 = float(2)
   const layer3 = float(3)
 
-  const height0 = sampleTriplanarArray(
-    heightTexture,
-    layer0,
-    TILE_SCALE.mul(0.9)
-  )
-  const height1 = sampleTriplanarArray(
-    heightTexture,
-    layer1,
-    TILE_SCALE.mul(0.9)
-  )
-  const height2 = sampleTriplanarArray(
-    heightTexture,
-    layer2,
-    TILE_SCALE.mul(0.9)
-  )
-  const height3 = sampleTriplanarArray(
-    heightTexture,
-    layer3,
-    TILE_SCALE.mul(0.9)
-  )
+  const height0 = sampleTriplanarArray(heightTexture, layer0, heightTileScale)
+  const height1 = sampleTriplanarArray(heightTexture, layer1, heightTileScale)
+  const height2 = sampleTriplanarArray(heightTexture, layer2, heightTileScale)
+  const height3 = sampleTriplanarArray(heightTexture, layer3, heightTileScale)
 
   const blendedWeights = sharpenSplatWeights(
     splatWeights,
@@ -169,41 +169,25 @@ export function createTerrainMaterial(textures: TerrainTextureSet) {
     height3
   )
 
-  const color0 = sampleTriplanarArray(baseColorTexture, layer0).rgb
-  const color1 = sampleTriplanarArray(baseColorTexture, layer1).rgb
-  const color2 = sampleTriplanarArray(baseColorTexture, layer2).rgb
-  const color3 = sampleTriplanarArray(baseColorTexture, layer3).rgb
+  const color0 = sampleTriplanarArray(baseColorTexture, layer0, tileScale).rgb
+  const color1 = sampleTriplanarArray(baseColorTexture, layer1, tileScale).rgb
+  const color2 = sampleTriplanarArray(baseColorTexture, layer2, tileScale).rgb
+  const color3 = sampleTriplanarArray(baseColorTexture, layer3, tileScale).rgb
 
-  const rough0 = sampleTriplanarArray(roughnessTexture, layer0).r
-  const rough1 = sampleTriplanarArray(roughnessTexture, layer1).r
-  const rough2 = sampleTriplanarArray(roughnessTexture, layer2).r
-  const rough3 = sampleTriplanarArray(roughnessTexture, layer3).r
+  const rough0 = sampleTriplanarArray(roughnessTexture, layer0, tileScale).r
+  const rough1 = sampleTriplanarArray(roughnessTexture, layer1, tileScale).r
+  const rough2 = sampleTriplanarArray(roughnessTexture, layer2, tileScale).r
+  const rough3 = sampleTriplanarArray(roughnessTexture, layer3, tileScale).r
 
-  const metal0 = sampleTriplanarArray(metalnessTexture, layer0).r
-  const metal1 = sampleTriplanarArray(metalnessTexture, layer1).r
-  const metal2 = sampleTriplanarArray(metalnessTexture, layer2).r
-  const metal3 = sampleTriplanarArray(metalnessTexture, layer3).r
+  const metal0 = sampleTriplanarArray(metalnessTexture, layer0, tileScale).r
+  const metal1 = sampleTriplanarArray(metalnessTexture, layer1, tileScale).r
+  const metal2 = sampleTriplanarArray(metalnessTexture, layer2, tileScale).r
+  const metal3 = sampleTriplanarArray(metalnessTexture, layer3, tileScale).r
 
-  const normal0 = sampleTriplanarNormal(
-    normalTexture,
-    layer0,
-    TILE_SCALE.mul(1.15)
-  )
-  const normal1 = sampleTriplanarNormal(
-    normalTexture,
-    layer1,
-    TILE_SCALE.mul(1.15)
-  )
-  const normal2 = sampleTriplanarNormal(
-    normalTexture,
-    layer2,
-    TILE_SCALE.mul(1.15)
-  )
-  const normal3 = sampleTriplanarNormal(
-    normalTexture,
-    layer3,
-    TILE_SCALE.mul(1.15)
-  )
+  const normal0 = sampleTriplanarNormal(normalTexture, layer0, normalTileScale)
+  const normal1 = sampleTriplanarNormal(normalTexture, layer1, normalTileScale)
+  const normal2 = sampleTriplanarNormal(normalTexture, layer2, normalTileScale)
+  const normal3 = sampleTriplanarNormal(normalTexture, layer3, normalTileScale)
 
   const blendedColor = color0
     .mul(blendedWeights.x)
@@ -238,6 +222,8 @@ export function createTerrainMaterial(textures: TerrainTextureSet) {
     .normalize()
 
   const frostAmount = smoothstep(float(16), float(30), terrainHeight)
+    .mul(float(settings.frostStrength))
+    .clamp(0, 1)
   const finalColor = mix(
     blendedColor,
     blendedColor.mul(vec3(1.04, 1.05, 1.08)),

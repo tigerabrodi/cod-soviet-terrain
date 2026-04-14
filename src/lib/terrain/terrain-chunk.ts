@@ -2,6 +2,10 @@ import { BufferAttribute, BufferGeometry, Float32BufferAttribute } from 'three'
 import { hasSharedArrayBufferSupport } from '@/lib/shared/shared-array-buffer'
 import { NoiseGenerator } from './noise'
 import {
+  DEFAULT_TERRAIN_GENERATION_SETTINGS,
+  type TerrainGenerationSettings,
+} from './terrain-settings'
+import {
   PLANET_MAX_HEIGHT,
   PLANET_MIN_HEIGHT,
   PLANET_RADIUS,
@@ -29,6 +33,7 @@ export interface TerrainChunkBuildOptions {
   sharedArrayBuffer?: boolean
   size?: number
   skirtDepth?: number
+  terrainSettings?: TerrainGenerationSettings
 }
 
 export interface TerrainChunkStats {
@@ -145,28 +150,47 @@ export function createTerrainChunkGeometry(chunkBuffers: TerrainChunkBuffers) {
   return geometry
 }
 
-export function sampleTerrainHeight(x: number, z: number) {
+export function sampleTerrainHeight(
+  x: number,
+  z: number,
+  settings: TerrainGenerationSettings = DEFAULT_TERRAIN_GENERATION_SETTINGS
+) {
   const broad = broadNoise.get(x, 17.3, z) - 10.5
-  const detail = (detailNoise.get(x * 1.15, 61.4, z * 1.15) - 4.8) * 0.85
-  const ridge = (ridgeNoise.get(x * 1.35, 109.7, z * 1.35) - 4.1) * 0.45
+  const detail =
+    (detailNoise.get(x * 1.15, 61.4, z * 1.15) - 4.8) *
+    0.85 *
+    settings.detailStrength
+  const ridge =
+    (ridgeNoise.get(x * 1.35, 109.7, z * 1.35) - 4.1) *
+    0.45 *
+    settings.ridgeStrength
   const craterField = craterNoise.get(x * 0.85, 177.2, z * 0.85)
   const craterMask = smoothstep(6.2, 9.3, craterField)
-  const craterDepth = craterMask * craterMask * 7.5
+  const craterDepth = craterMask * craterMask * 7.5 * settings.craterStrength
 
-  return 12 + broad + detail + ridge - craterDepth
+  return 12 + (broad + detail + ridge - craterDepth) * settings.heightScale
 }
 
-export function samplePlanetTerrainHeight(x: number, y: number, z: number) {
+export function samplePlanetTerrainHeight(
+  x: number,
+  y: number,
+  z: number,
+  settings: TerrainGenerationSettings = DEFAULT_TERRAIN_GENERATION_SETTINGS
+) {
   const broad = broadNoise.get(x, y + 17.3, z) - 10.5
   const detail =
-    (detailNoise.get(x * 1.15, y * 1.15 + 61.4, z * 1.15) - 4.8) * 0.72
+    (detailNoise.get(x * 1.15, y * 1.15 + 61.4, z * 1.15) - 4.8) *
+    0.72 *
+    settings.detailStrength
   const ridge =
-    (ridgeNoise.get(x * 1.35, y * 1.35 + 109.7, z * 1.35) - 4.1) * 0.4
+    (ridgeNoise.get(x * 1.35, y * 1.35 + 109.7, z * 1.35) - 4.1) *
+    0.4 *
+    settings.ridgeStrength
   const craterField = craterNoise.get(x * 0.85, y * 0.85 + 177.2, z * 0.85)
   const craterMask = smoothstep(6.2, 9.3, craterField)
-  const craterDepth = craterMask * craterMask * 5.5
+  const craterDepth = craterMask * craterMask * 5.5 * settings.craterStrength
 
-  return 8 + broad + detail + ridge - craterDepth
+  return 8 + (broad + detail + ridge - craterDepth) * settings.heightScale
 }
 
 export function computeSplatWeights(
@@ -200,6 +224,8 @@ function generateFlatTerrainChunkBuffers(
   const resolution = options.resolution ?? DEFAULT_TERRAIN_CHUNK_RESOLUTION
   const size = options.size ?? DEFAULT_TERRAIN_CHUNK_SIZE
   const skirtDepth = options.skirtDepth ?? 0
+  const terrainSettings =
+    options.terrainSettings ?? DEFAULT_TERRAIN_GENERATION_SETTINGS
   const isSharedArrayBufferEnabled = options.sharedArrayBuffer === true
   const baseVertexCount = (resolution + 1) * (resolution + 1)
   const skirtVertexCount = skirtDepth > 0 ? 8 * (resolution + 1) : 0
@@ -223,7 +249,7 @@ function generateFlatTerrainChunkBuffers(
       const x = -halfSize + (xIndex / resolution) * size
       const absoluteWorldPosition = {
         x: x + offsetX,
-        y: sampleTerrainHeight(x + offsetX, z + offsetZ),
+        y: sampleTerrainHeight(x + offsetX, z + offsetZ, terrainSettings),
         z: z + offsetZ,
       }
 
@@ -293,6 +319,8 @@ function generatePlanetTerrainChunkBuffers(
   const resolution = options.resolution ?? DEFAULT_TERRAIN_CHUNK_RESOLUTION
   const size = options.size ?? DEFAULT_TERRAIN_CHUNK_SIZE
   const skirtDepth = options.skirtDepth ?? 0
+  const terrainSettings =
+    options.terrainSettings ?? DEFAULT_TERRAIN_GENERATION_SETTINGS
   const isSharedArrayBufferEnabled = options.sharedArrayBuffer === true
   const baseVertexCount = (resolution + 1) * (resolution + 1)
   const skirtVertexCount = skirtDepth > 0 ? 8 * (resolution + 1) : 0
@@ -324,7 +352,8 @@ function generatePlanetTerrainChunkBuffers(
       const height = samplePlanetTerrainHeight(
         basePlanetPoint.x,
         basePlanetPoint.y,
-        basePlanetPoint.z
+        basePlanetPoint.z,
+        terrainSettings
       )
       const absoluteWorldPosition = {
         x: basePlanetPoint.x + up.x * height,

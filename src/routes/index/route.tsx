@@ -1,7 +1,24 @@
-import type { CameraMode } from '@/components/terrain-scene'
+import { TerrainDebugPanel } from '@/components/terrain-debug-panel'
+import type {
+  CameraMode,
+  TerrainSceneDebugState,
+} from '@/components/terrain-scene'
+import {
+  TERRAIN_DEBUG_STORAGE_KEY,
+  clampTerrainDebugSettings,
+  createDefaultTerrainDebugSettings,
+  parseTerrainDebugSettings,
+  type TerrainDebugSettings,
+} from '@/lib/debug/terrain-debug'
 import { createFileRoute } from '@tanstack/react-router'
 import { motion } from 'motion/react'
-import { Suspense, lazy, startTransition, useState } from 'react'
+import {
+  Suspense,
+  lazy,
+  startTransition,
+  useEffect,
+  useState,
+} from 'react'
 
 const TerrainScene = lazy(() =>
   import('@/components/terrain-scene').then((module) => ({
@@ -16,7 +33,61 @@ export const Route = createFileRoute('/')({
 function HomePage() {
   const [backend, setBackend] = useState('Initializing')
   const [cameraMode, setCameraMode] = useState<CameraMode>('orbit')
+  const [debugState, setDebugState] = useState<TerrainSceneDebugState | null>(
+    null
+  )
+  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false)
+  const [debugSettings, setDebugSettings] = useState<TerrainDebugSettings>(
+    () => {
+      if (typeof window === 'undefined') {
+        return createDefaultTerrainDebugSettings()
+      }
+
+      return parseTerrainDebugSettings(
+        window.localStorage.getItem(TERRAIN_DEBUG_STORAGE_KEY)
+      )
+    }
+  )
   const [isReady, setIsReady] = useState(false)
+  const [debouncedTerrainGeneration, setDebouncedTerrainGeneration] = useState(
+    debugSettings.terrainGeneration
+  )
+  const [debouncedTerrainMaterial, setDebouncedTerrainMaterial] = useState(
+    debugSettings.terrainMaterial
+  )
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedTerrainGeneration(debugSettings.terrainGeneration)
+    }, 180)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [debugSettings.terrainGeneration])
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedTerrainMaterial(debugSettings.terrainMaterial)
+    }, 90)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [debugSettings.terrainMaterial])
+
+  const sceneDebugSettings: TerrainDebugSettings = {
+    ...debugSettings,
+    terrainGeneration: debouncedTerrainGeneration,
+    terrainMaterial: debouncedTerrainMaterial,
+  }
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      TERRAIN_DEBUG_STORAGE_KEY,
+      JSON.stringify(debugSettings)
+    )
+  }, [debugSettings])
 
   return (
     <div className="relative h-dvh overflow-hidden bg-[#090d12] text-[#edf2f7]">
@@ -24,9 +95,15 @@ function HomePage() {
       <Suspense fallback={<div className="absolute inset-0 bg-[#081018]" />}>
         <TerrainScene
           cameraMode={cameraMode}
+          debugSettings={sceneDebugSettings}
           onBackendChange={(nextBackend) => {
             startTransition(() => {
               setBackend(nextBackend)
+            })
+          }}
+          onDebugStateChange={(nextDebugState) => {
+            startTransition(() => {
+              setDebugState(nextDebugState)
             })
           }}
           onReadyChange={(nextReady) => {
@@ -52,52 +129,71 @@ function HomePage() {
             </p>
           </motion.div>
 
-          <motion.div
-            animate={{ opacity: 1, y: 0 }}
-            className="pointer-events-auto rounded-[18px] border border-white/10 bg-black/22 px-4 py-3 text-right backdrop-blur-md"
-            initial={{ opacity: 0, y: 10 }}
-            transition={{ delay: 0.06, duration: 0.55, ease: 'easeOut' }}
-          >
-            <p className="font-body text-[10px] tracking-[0.26em] text-[#c9d2dc]/68 uppercase">
-              {backend}
-            </p>
-            <p className="font-body mt-2 text-sm text-[#eef2f6]">
-              {isReady ? 'World ready' : 'Loading world'}
-            </p>
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                className={`font-body rounded-full border px-3 py-1 text-xs transition ${
-                  cameraMode === 'orbit'
-                    ? 'border-[#dbe6f3]/42 bg-[#dbe6f3]/14 text-[#f4f7fb]'
-                    : 'border-white/10 bg-white/5 text-[#d0d8e1]'
-                }`}
-                onClick={() => {
-                  startTransition(() => {
-                    setCameraMode('orbit')
-                  })
-                }}
-                type="button"
-              >
-                Inspect
-              </button>
-              <button
-                className={`font-body rounded-full border px-3 py-1 text-xs transition ${
-                  cameraMode === 'fly'
-                    ? 'border-[#dbe6f3]/42 bg-[#dbe6f3]/14 text-[#f4f7fb]'
-                    : 'border-white/10 bg-white/5 text-[#d0d8e1]'
-                }`}
-                onClick={() => {
-                  startTransition(() => {
-                    setCameraMode('fly')
-                  })
-                }}
-                type="button"
-              >
-                Fly
-              </button>
-            </div>
-          </motion.div>
+          <div className="flex flex-col items-end gap-3">
+            <motion.div
+              animate={{ opacity: 1, y: 0 }}
+              className="pointer-events-auto rounded-[18px] border border-white/10 bg-black/22 px-4 py-3 text-right backdrop-blur-md"
+              initial={{ opacity: 0, y: 10 }}
+              transition={{ delay: 0.06, duration: 0.55, ease: 'easeOut' }}
+            >
+              <p className="font-body text-[10px] tracking-[0.26em] text-[#c9d2dc]/68 uppercase">
+                {backend}
+              </p>
+              <p className="font-body mt-2 text-sm text-[#eef2f6]">
+                {isReady ? 'World ready' : 'Loading world'}
+              </p>
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  className={`font-body rounded-full border px-3 py-1 text-xs transition ${
+                    cameraMode === 'orbit'
+                      ? 'border-[#dbe6f3]/42 bg-[#dbe6f3]/14 text-[#f4f7fb]'
+                      : 'border-white/10 bg-white/5 text-[#d0d8e1]'
+                  }`}
+                  onClick={() => {
+                    startTransition(() => {
+                      setCameraMode('orbit')
+                    })
+                  }}
+                  type="button"
+                >
+                  Inspect
+                </button>
+                <button
+                  className={`font-body rounded-full border px-3 py-1 text-xs transition ${
+                    cameraMode === 'fly'
+                      ? 'border-[#dbe6f3]/42 bg-[#dbe6f3]/14 text-[#f4f7fb]'
+                      : 'border-white/10 bg-white/5 text-[#d0d8e1]'
+                  }`}
+                  onClick={() => {
+                    startTransition(() => {
+                      setCameraMode('fly')
+                    })
+                  }}
+                  type="button"
+                >
+                  Fly
+                </button>
+              </div>
+            </motion.div>
+          </div>
         </div>
+
+        <TerrainDebugPanel
+          debugState={debugState}
+          isOpen={isDebugPanelOpen}
+          onOpenChange={setIsDebugPanelOpen}
+          onReset={() => {
+            startTransition(() => {
+              setDebugSettings(createDefaultTerrainDebugSettings())
+            })
+          }}
+          onSettingsChange={(nextSettings) => {
+            startTransition(() => {
+              setDebugSettings(clampTerrainDebugSettings(nextSettings))
+            })
+          }}
+          settings={debugSettings}
+        />
 
         <motion.div
           animate={{ opacity: 1, y: 0 }}
