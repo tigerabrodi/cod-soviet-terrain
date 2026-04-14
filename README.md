@@ -62,6 +62,14 @@ Steep zones pull in rocky rubble at any height.
 
 This gives the planet a worn. cold. patina heavy surface language. It reads well from orbit and from a low fly pass.
 
+The terrain also supports a sparse dead tree layer.
+
+Those trees are leafless. bark only. and intentionally restrained.
+
+The goal is not to turn the planet into a forest.
+
+The goal is to add a little more scale language and war torn silhouette without overwhelming the terrain.
+
 ## Why the rendering path is modern
 
 The project uses `three/webgpu` for the rendering backend.
@@ -219,6 +227,24 @@ This is the practical split.
 - particles for atmosphere.
 - accumulation for simulation.
 - terrain shading for final appearance.
+
+## Vegetation system
+
+The dead trees use the same chunked world model as the terrain.
+
+Each visible chunk can deterministically place a sparse set of trees from its chunk key and terrain samples.
+
+That means the same chunk always grows the same trees.
+
+There is no noisy rerolling when chunks stream back in.
+
+The runtime renders those trees as instanced meshes.
+
+That keeps the scene much lighter than spawning a full mesh object for every single trunk.
+
+The bark textures are KTX2 as well.
+
+That keeps the vegetation path consistent with the rest of the project.
 
 ## Sky and lighting
 

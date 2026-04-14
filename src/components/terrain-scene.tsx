@@ -1,4 +1,5 @@
 import { FlyCameraController } from '@/components/fly-camera-controller'
+import { TerrainTrees } from '@/components/terrain-trees'
 import {
   INITIAL_ORBIT_CAMERA_POSITION,
   getModeSetup,
@@ -89,6 +90,7 @@ export interface TerrainSceneDebugState {
   chunkCount: number
   lodCounts: Record<number, number>
   sharedBufferChunks: number
+  treeCount: number
   triangleCount: number
   worldOrigin: Vec3Like
 }
@@ -188,6 +190,7 @@ function TerrainWorld({
   const [cameraFocusWorld, setCameraFocusWorld] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).cameraFocusWorld
   )
+  const [treeCountSnapshot, setTreeCountSnapshot] = useState(0)
   const snowAccumulationSettings = useMemo<SnowAccumulationSettings>(
     () => ({
       accumulationRate: debugSettings.weather.accumulationRate,
@@ -403,6 +406,7 @@ function TerrainWorld({
       sharedBufferChunks: Object.values(terrainChunks).filter(
         (terrainChunk) => terrainChunk.sharedArrayBufferBacked
       ).length,
+      treeCount: treeCountSnapshot,
       triangleCount: Object.values(terrainChunks).reduce(
         (triangleTotal, terrainChunk) =>
           triangleTotal + (terrainChunk.geometry.index?.count ?? 0) / 3,
@@ -430,6 +434,7 @@ function TerrainWorld({
     cameraMode,
     onDebugStateChange,
     terrainChunks,
+    treeCountSnapshot,
     worldOriginSnapshot,
   ])
 
@@ -746,6 +751,14 @@ function TerrainWorld({
             )}
           </mesh>
         ))}
+        <TerrainTrees
+          chunks={Object.values(terrainChunks)}
+          onTreeCountChange={(treeCount) => {
+            setTreeCountSnapshot(treeCount)
+          }}
+          terrainSettings={debugSettings.terrainGeneration}
+          vegetationSettings={debugSettings.vegetation}
+        />
       </WorldOriginAnchor>
       {cameraMode === 'orbit' ? (
         <>

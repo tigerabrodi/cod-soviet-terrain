@@ -24,6 +24,12 @@ describe('clampTerrainDebugSettings', () => {
         frostStrength: 5,
         textureScale: 0.1,
       },
+      vegetation: {
+        density: 4,
+        enabled: true,
+        heightScale: 0.1,
+        maxLodLevel: 8,
+      },
       weather: {
         accumulationRate: 9,
         coverageStrength: 9,
@@ -45,6 +51,9 @@ describe('clampTerrainDebugSettings', () => {
     expect(clamped.terrainGeneration.craterStrength).toBe(0)
     expect(clamped.terrainMaterial.textureScale).toBe(0.45)
     expect(clamped.terrainMaterial.frostStrength).toBe(2)
+    expect(clamped.vegetation.density).toBe(2.4)
+    expect(clamped.vegetation.heightScale).toBe(0.55)
+    expect(clamped.vegetation.maxLodLevel).toBe(2)
     expect(clamped.weather.accumulationRate).toBe(2.5)
     expect(clamped.weather.coverageStrength).toBe(2)
     expect(clamped.weather.snowDensity).toBe(0)
@@ -71,6 +80,9 @@ describe('parseTerrainDebugSettings', () => {
         terrainGeneration: {
           heightScale: 1.4,
         },
+        vegetation: {
+          enabled: false,
+        },
         weather: {
           snowEnabled: false,
         },
@@ -78,6 +90,8 @@ describe('parseTerrainDebugSettings', () => {
     )
 
     expect(parsed.terrainGeneration.heightScale).toBe(1.4)
+    expect(parsed.vegetation.enabled).toBe(false)
+    expect(parsed.vegetation.density).toBe(0.9)
     expect(parsed.weather.snowEnabled).toBe(false)
     expect(parsed.weather.accumulationRate).toBe(0.35)
     expect(parsed.weather.fallSpeed).toBe(1)

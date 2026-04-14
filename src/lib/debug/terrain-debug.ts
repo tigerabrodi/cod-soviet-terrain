@@ -16,6 +16,13 @@ export interface TerrainLightingDebugSettings {
   sunIntensity: number
 }
 
+export interface TerrainVegetationDebugSettings {
+  density: number
+  enabled: boolean
+  heightScale: number
+  maxLodLevel: number
+}
+
 export interface TerrainWeatherDebugSettings {
   accumulationRate: number
   coverageStrength: number
@@ -31,6 +38,7 @@ export interface TerrainDebugSettings {
   lighting: TerrainLightingDebugSettings
   terrainGeneration: TerrainGenerationSettings
   terrainMaterial: TerrainMaterialDebugSettings
+  vegetation: TerrainVegetationDebugSettings
   weather: TerrainWeatherDebugSettings
 }
 
@@ -46,6 +54,12 @@ export const DEFAULT_TERRAIN_DEBUG_SETTINGS: TerrainDebugSettings = {
   terrainMaterial: {
     frostStrength: 1,
     textureScale: 1,
+  },
+  vegetation: {
+    density: 0.9,
+    enabled: true,
+    heightScale: 1,
+    maxLodLevel: 1,
   },
   weather: {
     accumulationRate: 0.35,
@@ -64,6 +78,7 @@ export function createDefaultTerrainDebugSettings(): TerrainDebugSettings {
     lighting: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.lighting },
     terrainGeneration: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.terrainGeneration },
     terrainMaterial: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.terrainMaterial },
+    vegetation: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.vegetation },
     weather: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.weather },
   }
 }
@@ -85,6 +100,12 @@ export function clampTerrainDebugSettings(settings: TerrainDebugSettings) {
     terrainMaterial: {
       frostStrength: clamp(settings.terrainMaterial.frostStrength, 0, 2),
       textureScale: clamp(settings.terrainMaterial.textureScale, 0.45, 1.8),
+    },
+    vegetation: {
+      density: clamp(settings.vegetation.density, 0, 2.4),
+      enabled: settings.vegetation.enabled,
+      heightScale: clamp(settings.vegetation.heightScale, 0.55, 1.8),
+      maxLodLevel: Math.round(clamp(settings.vegetation.maxLodLevel, 0, 2)),
     },
     weather: {
       accumulationRate: clamp(settings.weather.accumulationRate, 0, 2.5),
@@ -122,6 +143,10 @@ export function parseTerrainDebugSettings(
       terrainMaterial: {
         ...defaults.terrainMaterial,
         ...parsed.terrainMaterial,
+      },
+      vegetation: {
+        ...defaults.vegetation,
+        ...parsed.vegetation,
       },
       weather: {
         ...defaults.weather,

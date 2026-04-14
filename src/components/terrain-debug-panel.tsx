@@ -28,7 +28,7 @@ export function TerrainDebugPanel({
               Debug
             </p>
             <p className="font-body mt-1 text-sm text-[#eef2f6]">
-              Tune terrain. weather. and lighting.
+              Tune terrain. weather. vegetation. and lighting.
             </p>
           </div>
           <div className="flex gap-2">
@@ -51,7 +51,7 @@ export function TerrainDebugPanel({
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-[#dbe4ec]/82 sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-[#dbe4ec]/82 sm:grid-cols-5">
           <StatChip
             label="Chunks"
             value={debugState ? String(debugState.chunkCount) : '...'}
@@ -63,6 +63,10 @@ export function TerrainDebugPanel({
           <StatChip
             label="SAB"
             value={debugState ? String(debugState.sharedBufferChunks) : '...'}
+          />
+          <StatChip
+            label="Trees"
+            value={debugState ? formatCount(debugState.treeCount) : '...'}
           />
           <StatChip
             label="LOD"
@@ -299,6 +303,70 @@ export function TerrainDebugPanel({
                 }}
                 step={0.05}
                 value={settings.weather.driftStrength}
+              />
+            </DebugSection>
+
+            <DebugSection title="Vegetation">
+              <ToggleControl
+                checked={settings.vegetation.enabled}
+                label="Dead trees enabled"
+                onChange={(checked) => {
+                  onSettingsChange({
+                    ...settings,
+                    vegetation: {
+                      ...settings.vegetation,
+                      enabled: checked,
+                    },
+                  })
+                }}
+              />
+              <SliderControl
+                label="Tree density"
+                max={2.4}
+                min={0}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    vegetation: {
+                      ...settings.vegetation,
+                      density: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.vegetation.density}
+              />
+              <SliderControl
+                label="Tree height"
+                max={1.8}
+                min={0.55}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    vegetation: {
+                      ...settings.vegetation,
+                      heightScale: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.vegetation.heightScale}
+              />
+              <SliderControl
+                label="Tree LOD range"
+                max={2}
+                min={0}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    vegetation: {
+                      ...settings.vegetation,
+                      maxLodLevel: Math.round(value),
+                    },
+                  })
+                }}
+                step={1}
+                value={settings.vegetation.maxLodLevel}
               />
             </DebugSection>
 
