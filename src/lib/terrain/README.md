@@ -6,8 +6,11 @@ The important runtime pieces are.
 
 - `terrain-planet.ts`. Pure planet math. Cube face mapping. planet quadtree chunk selection. and mixed LOD edge morph lookup.
 - `terrain-chunk.ts`. Chunk mesh generation. SharedArrayBuffer aware typed array allocation. skirts. edge stitching. and splat weights.
+- `terrain-sampling.ts`. Terrain height sampling. splat logic. terrain seed offsets. and the noise controls used by the debug panel.
 - `terrain-chunk.worker.ts`. Worker entry for background chunk builds.
 - `terrain-worker-pool.ts`. Small worker pool that keeps chunk generation off the main thread.
+- `terrain-runtime-scheduling.ts`. Small pure helpers for request budgeting and round robin runtime work.
+- `terrain-chunk-transition.ts`. Small pure helper for chunk reveal timing.
 - `terrain-material.ts`. WebGPU and TSL terrain material. Triplanar PBR splatting with the packed KTX2 texture arrays.
 - `terrain-textures.ts`. KTX2 loading and texture array packing.
 
@@ -15,11 +18,17 @@ The important runtime pieces are.
 
 - Chunk generation runs in workers. The main thread stays responsive for camera input and rendering.
 - Worker results use `SharedArrayBuffer` when the browser is cross origin isolated. That avoids the usual copy heavy return path.
+- Finished chunk results are queued and committed in small batches. That avoids React spikes when many workers finish close together.
+- The fly camera streams a little ahead of its current movement direction. That starts chunk work sooner when you move fast.
 - The quadtree only asks for high detail near the current camera focus.
+- Older chunk generations stay alive briefly during handoff. That reduces visible holes and makes the stream transition smoother.
 - Chunk buffers are built once and then wrapped into Three geometry. We do not rebuild the whole world every frame.
 - The material samples compressed KTX2 texture arrays. This keeps memory and upload cost under control.
 - Triplanar sampling avoids stretched UVs on steep terrain so we do not need bespoke unwrap work.
 - `terrainCoords` and `terrainHeight` are stored as attributes so the shader stays stable even when the world render origin moves.
+- New chunks reveal from a fog tinted state over a short window. That hides hard pop in without using transparent terrain sorting.
+- Noise scale and strength values live in the terrain settings object. That lets the debug UI regenerate genuinely different terrain shapes instead of faking a material only change.
+- The terrain seed works by shifting the sampled noise fields in a stable way. That gives new planet variations without changing the whole terrain pipeline or breaking chunk determinism.
 
 ## Current project state
 

@@ -32,11 +32,14 @@ import {
   useState,
   type MutableRefObject,
 } from 'react'
+import { Float32BufferAttribute } from 'three'
 
 export interface TerrainChunkRuntime extends PlanetChunkDescriptor {
   buildOrigin: readonly [number, number, number]
   edgeMorph: TerrainChunkEdgeMorph
   geometry: ReturnType<typeof createTerrainChunkGeometry>
+  lastSeenGeneration: number
+  revealStartedAtSeconds: number
   sharedArrayBufferBacked: boolean
   stats: TerrainChunkStats
   terrainGenerationSignature: string
@@ -61,10 +64,15 @@ interface UseTerrainChunkStreamingParams {
   worldOriginRef: MutableRefObject<Vec3Like>
 }
 
-const MAX_CHUNK_COMMITS_PER_FLUSH = 2
-const MAX_INFLIGHT_CHUNK_REQUESTS = 4
-const MAX_NEW_REQUESTS_PER_PASS = 2
-const MAX_WORKERS = 4
+export interface TerrainChunkStreamingRuntimeStats {
+  inflightChunkCount: number
+  pendingChunkCommitCount: number
+}
+
+const MAX_CHUNK_COMMITS_PER_FLUSH = 6
+const MAX_INFLIGHT_CHUNK_REQUESTS = 12
+const MAX_NEW_REQUESTS_PER_PASS = 6
+const MAX_RETAINED_GENERATION_LAG = 2
 const ZERO_EDGE_MORPH: TerrainChunkEdgeMorph = {
   east: 0,
   north: 0,
@@ -94,6 +102,11 @@ export function useTerrainChunkStreaming({
     new Map<string, PendingTerrainChunkCommit>()
   )
   const terrainChunksRef = useRef<Record<string, TerrainChunkRuntime>>({})
+  const runtimeStatsRef = useRef<TerrainChunkStreamingRuntimeStats>({
+    inflightChunkCount: 0,
+    pendingChunkCommitCount: 0,
+  })
+  const desiredGenerationRef = useRef(0)
   const chunkCommitFlushFrameRef = useRef<number | null>(null)
   const flushPendingChunkCommitsRef = useRef<() => void>(() => {})
   const workerPoolRef = useRef<TerrainChunkWorkerPool | null>(null)
@@ -109,6 +122,62 @@ export function useTerrainChunkStreaming({
     })
   }, [])
 
+  const syncRuntimeStats = useCallback(() => {
+    runtimeStatsRef.current = {
+      inflightChunkCount: inflightChunkLookupRef.current.size,
+      pendingChunkCommitCount: pendingChunkCommitLookupRef.current.size,
+    }
+  }, [])
+
+  const pruneRetainedTerrainChunks = useCallback(() => {
+    const desiredGeneration = desiredGenerationRef.current
+
+    setTerrainChunks((currentTerrainChunks) => {
+      let nextTerrainChunks = currentTerrainChunks
+      const isDesiredWindowReadyNow = isDesiredWindowReady(
+        currentTerrainChunks,
+        desiredChunkLookupRef.current,
+        desiredEdgeMorphLookupRef.current,
+        terrainGenerationSignature
+      )
+
+      for (const [terrainChunkKey, terrainChunk] of Object.entries(
+        currentTerrainChunks
+      )) {
+        const isCurrentGenerationChunk =
+          terrainChunk.lastSeenGeneration >= desiredGeneration
+
+        if (isCurrentGenerationChunk) {
+          continue
+        }
+
+        const shouldPrune =
+          isDesiredWindowReadyNow ||
+          terrainChunk.lastSeenGeneration <
+            desiredGeneration - MAX_RETAINED_GENERATION_LAG
+
+        if (!shouldPrune) {
+          continue
+        }
+
+        if (nextTerrainChunks === currentTerrainChunks) {
+          nextTerrainChunks = { ...currentTerrainChunks }
+        }
+
+        nextTerrainChunks[terrainChunkKey]?.geometry.dispose()
+        delete nextTerrainChunks[terrainChunkKey]
+        inflightChunkLookupRef.current.delete(terrainChunkKey)
+        pendingChunkCommitLookupRef.current.delete(terrainChunkKey)
+        snowStateLookupRef.current.delete(terrainChunkKey)
+      }
+
+      terrainChunksRef.current = nextTerrainChunks
+      return nextTerrainChunks
+    })
+
+    syncRuntimeStats()
+  }, [snowStateLookupRef, syncRuntimeStats, terrainGenerationSignature])
+
   const flushPendingChunkCommits = useCallback(() => {
     const pendingEntries = Array.from(
       pendingChunkCommitLookupRef.current.entries()
@@ -121,6 +190,7 @@ export function useTerrainChunkStreaming({
     for (const [terrainChunkKey] of pendingEntries) {
       pendingChunkCommitLookupRef.current.delete(terrainChunkKey)
     }
+    syncRuntimeStats()
 
     setTerrainChunks((currentTerrainChunks) => {
       let nextTerrainChunks = currentTerrainChunks
@@ -165,6 +235,13 @@ export function useTerrainChunkStreaming({
 
         snowState.lastUpdateTime = snowSimulationTimeRef.current
         geometry.setAttribute('snowCoverage', snowState.accumulationAttribute)
+        geometry.setAttribute(
+          'chunkReveal',
+          new Float32BufferAttribute(
+            new Float32Array(pendingChunkCommit.chunkBuffers.terrainHeights.length),
+            1
+          )
+        )
 
         if (nextTerrainChunks === currentTerrainChunks) {
           nextTerrainChunks = { ...currentTerrainChunks }
@@ -179,6 +256,8 @@ export function useTerrainChunkStreaming({
           buildOrigin: pendingChunkCommit.buildOrigin,
           edgeMorph: desiredEdgeMorph,
           geometry,
+          lastSeenGeneration: desiredGenerationRef.current,
+          revealStartedAtSeconds: performance.now() * 0.001,
           sharedArrayBufferBacked: isSharedArrayBuffer(
             pendingChunkCommit.chunkBuffers.positions.buffer
           ),
@@ -192,10 +271,18 @@ export function useTerrainChunkStreaming({
       return nextTerrainChunks
     })
 
+    pruneRetainedTerrainChunks()
+
     if (pendingChunkCommitLookupRef.current.size > 0) {
       scheduleChunkCommitFlush()
     }
-  }, [scheduleChunkCommitFlush, snowSimulationTimeRef, snowStateLookupRef])
+  }, [
+    pruneRetainedTerrainChunks,
+    scheduleChunkCommitFlush,
+    snowSimulationTimeRef,
+    snowStateLookupRef,
+    syncRuntimeStats,
+  ])
 
   useEffect(() => {
     flushPendingChunkCommitsRef.current = flushPendingChunkCommits
@@ -204,7 +291,7 @@ export function useTerrainChunkStreaming({
   useEffect(() => {
     const snowStates = snowStateLookupRef.current
     const pendingChunkCommits = pendingChunkCommitLookupRef.current
-    const workerPool = new TerrainChunkWorkerPool(MAX_WORKERS)
+    const workerPool = new TerrainChunkWorkerPool(getTerrainWorkerCount())
 
     workerPoolRef.current = workerPool
 
@@ -223,10 +310,12 @@ export function useTerrainChunkStreaming({
 
       pendingChunkCommits.clear()
       snowStates.clear()
+      syncRuntimeStats()
     }
-  }, [snowStateLookupRef])
+  }, [snowStateLookupRef, syncRuntimeStats])
 
   useEffect(() => {
+    desiredGenerationRef.current += 1
     desiredChunkLookupRef.current = new Map(
       desiredChunkDescriptors.map((terrainChunk) => [
         terrainChunk.key,
@@ -242,9 +331,22 @@ export function useTerrainChunkStreaming({
 
     setTerrainChunks((currentTerrainChunks) => {
       let nextTerrainChunks = currentTerrainChunks
+      const desiredGeneration = desiredGenerationRef.current
 
-      for (const terrainChunkKey of Object.keys(currentTerrainChunks)) {
-        if (desiredChunkLookupRef.current.has(terrainChunkKey)) {
+      for (const [terrainChunkKey, terrainChunk] of Object.entries(
+        currentTerrainChunks
+      )) {
+        const desiredChunk = desiredChunkLookupRef.current.get(terrainChunkKey)
+        const desiredEdgeMorph =
+          desiredEdgeMorphLookupRef.current.get(terrainChunkKey) ??
+          ZERO_EDGE_MORPH
+
+        if (
+          !desiredChunk ||
+          desiredChunk.resolution !== terrainChunk.resolution ||
+          !edgeMorphEquals(desiredEdgeMorph, terrainChunk.edgeMorph) ||
+          terrainChunk.terrainGenerationSignature !== terrainGenerationSignature
+        ) {
           continue
         }
 
@@ -252,16 +354,17 @@ export function useTerrainChunkStreaming({
           nextTerrainChunks = { ...currentTerrainChunks }
         }
 
-        nextTerrainChunks[terrainChunkKey]?.geometry.dispose()
-        delete nextTerrainChunks[terrainChunkKey]
-        inflightChunkLookupRef.current.delete(terrainChunkKey)
-        pendingChunkCommitLookupRef.current.delete(terrainChunkKey)
-        snowStateLookupRef.current.delete(terrainChunkKey)
+        nextTerrainChunks[terrainChunkKey] = {
+          ...terrainChunk,
+          lastSeenGeneration: desiredGeneration,
+        }
       }
 
       terrainChunksRef.current = nextTerrainChunks
       return nextTerrainChunks
     })
+    syncRuntimeStats()
+    pruneRetainedTerrainChunks()
 
     const workerPool = workerPoolRef.current
 
@@ -324,6 +427,7 @@ export function useTerrainChunkStreaming({
       }
 
       inflightChunkLookupRef.current.set(terrainChunk.key, requestSignature)
+      syncRuntimeStats()
       requestedChunks += 1
 
       const buildOrigin = toOriginTuple(worldOriginRef.current)
@@ -351,6 +455,7 @@ export function useTerrainChunkStreaming({
           }
 
           inflightChunkLookupRef.current.delete(terrainChunk.key)
+          syncRuntimeStats()
 
           const desiredChunk = desiredChunkLookupRef.current.get(
             terrainChunk.key
@@ -378,6 +483,7 @@ export function useTerrainChunkStreaming({
             edgeMorph: desiredEdgeMorph,
             terrainGenerationSignature,
           })
+          syncRuntimeStats()
           scheduleChunkCommitFlush()
         })
         .catch((error: unknown) => {
@@ -386,6 +492,7 @@ export function useTerrainChunkStreaming({
             requestSignature
           ) {
             inflightChunkLookupRef.current.delete(terrainChunk.key)
+            syncRuntimeStats()
           }
           console.error('Failed to build terrain chunk in worker.', error)
         })
@@ -395,14 +502,16 @@ export function useTerrainChunkStreaming({
     desiredChunkDescriptors,
     desiredEdgeMorphs,
     scheduleChunkCommitFlush,
-    terrainChunks,
+    syncRuntimeStats,
     snowStateLookupRef,
     terrainGeneration,
     terrainGenerationSignature,
     worldOriginRef,
+    pruneRetainedTerrainChunks,
   ])
 
   return {
+    runtimeStatsRef,
     terrainChunks,
     terrainChunksRef,
   }
@@ -414,4 +523,39 @@ export function takeSnowChunksForSimulation(
   maxChunksPerStep: number
 ) {
   return takeCyclicWindow(Array.from(snowStates.entries()), maxChunksPerStep, cursor)
+}
+
+function isDesiredWindowReady(
+  terrainChunks: Record<string, TerrainChunkRuntime>,
+  desiredChunkLookup: Map<string, PlanetChunkDescriptor>,
+  desiredEdgeMorphLookup: Map<string, TerrainChunkEdgeMorph>,
+  terrainGenerationSignature: string
+) {
+  for (const [terrainChunkKey, desiredChunk] of desiredChunkLookup.entries()) {
+    const activeChunk = terrainChunks[terrainChunkKey]
+    const desiredEdgeMorph =
+      desiredEdgeMorphLookup.get(terrainChunkKey) ?? ZERO_EDGE_MORPH
+
+    if (
+      !activeChunk ||
+      activeChunk.resolution !== desiredChunk.resolution ||
+      activeChunk.face !== desiredChunk.face ||
+      activeChunk.terrainGenerationSignature !== terrainGenerationSignature ||
+      !edgeMorphEquals(activeChunk.edgeMorph, desiredEdgeMorph)
+    ) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function getTerrainWorkerCount() {
+  if (typeof navigator === 'undefined') {
+    return 6
+  }
+
+  const hardwareThreads = navigator.hardwareConcurrency ?? 8
+
+  return Math.min(8, Math.max(6, Math.floor(hardwareThreads * 0.5)))
 }

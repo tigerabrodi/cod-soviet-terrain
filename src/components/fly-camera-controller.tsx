@@ -48,12 +48,13 @@ export function FlyCameraController({
 
   useEffect(() => {
     const spawnState = initialFlyStateRef.current
+    const spawnStreamingFocus = getStreamingFocusWorld(spawnState)
 
     flyStateRef.current = spawnState
-    focusWorldRef.current = spawnState.position
+    focusWorldRef.current = spawnStreamingFocus
     worldOriginRef.current = spawnState.position
     onWorldOriginSnapshotChange(spawnState.position)
-    onCameraFocusWorldChange(spawnState.position)
+    onCameraFocusWorldChange(spawnStreamingFocus)
     syncCameraFromFlyState(camera, spawnState)
   }, [
     camera,
@@ -153,12 +154,14 @@ export function FlyCameraController({
     worldOriginRef.current = flyStateRef.current.position
     syncCameraFromFlyState(camera, flyStateRef.current)
 
+    const nextStreamingFocus = getStreamingFocusWorld(flyStateRef.current)
+
     if (
-      getDistance(flyStateRef.current.position, focusWorldRef.current) >=
+      getDistance(nextStreamingFocus, focusWorldRef.current) >=
       focusRefreshDistance
     ) {
-      focusWorldRef.current = flyStateRef.current.position
-      onCameraFocusWorldChange(flyStateRef.current.position)
+      focusWorldRef.current = nextStreamingFocus
+      onCameraFocusWorldChange(nextStreamingFocus)
       onWorldOriginSnapshotChange(flyStateRef.current.position)
     }
   })
@@ -217,4 +220,39 @@ function normalizeVec3(vector: Vec3Like) {
 
 function getDistance(left: Vec3Like, right: Vec3Like) {
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z)
+}
+
+function getStreamingFocusWorld(flyState: FlyCameraState) {
+  const movementDirection = normalizeOrZero(flyState.velocity)
+  const leadDistance = Math.min(56, Math.max(18, flyState.speed * 0.45))
+
+  if (isZeroVec3(movementDirection)) {
+    return flyState.position
+  }
+
+  return {
+    x: flyState.position.x + movementDirection.x * leadDistance,
+    y: flyState.position.y + movementDirection.y * leadDistance,
+    z: flyState.position.z + movementDirection.z * leadDistance,
+  }
+}
+
+function isZeroVec3(vector: Vec3Like) {
+  return (
+    Math.abs(vector.x) <= 0.000001 &&
+    Math.abs(vector.y) <= 0.000001 &&
+    Math.abs(vector.z) <= 0.000001
+  )
+}
+
+function normalizeOrZero(vector: Vec3Like) {
+  const length = Math.hypot(vector.x, vector.y, vector.z)
+
+  return length <= 0.000001
+    ? { x: 0, y: 0, z: 0 }
+    : {
+        x: vector.x / length,
+        y: vector.y / length,
+        z: vector.z / length,
+      }
 }

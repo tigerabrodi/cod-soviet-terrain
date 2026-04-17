@@ -24,6 +24,7 @@ export interface TerrainMaterialSettings {
   frostStrength: number
   snowAccumulationStrength: number
   textureScale: number
+  wireframe?: boolean
 }
 
 export const DEFAULT_TERRAIN_MATERIAL_SETTINGS: TerrainMaterialSettings = {
@@ -40,6 +41,7 @@ const terrainCoords = attribute('terrainCoords', 'vec3')
 const terrainHeight = attribute('terrainHeight', 'float')
 const terrainUp = attribute('terrainUp', 'vec3')
 const snowCoverage = attribute('snowCoverage', 'float')
+const chunkReveal = attribute('chunkReveal', 'float')
 
 const getProjectionWeights = Fn(([surfaceNormal = normalLocal]) => {
   const axisWeights = surfaceNormal.abs().add(0.0001).toVar()
@@ -252,13 +254,33 @@ export function createTerrainMaterial(
   const finalColor = mix(frostTintedColor, snowTint, finalSnowAmount)
   const finalRoughness = mix(blendedRoughness, float(0.9), finalSnowAmount)
   const finalMetalness = mix(blendedMetalness, float(0), finalSnowAmount)
+  const revealAmount = smoothstep(float(0), float(1), chunkReveal.clamp(0, 1))
+  const revealShade = mix(
+    float(0.96),
+    float(1),
+    finalSnowAmount.mul(0.4).add(frostAmount.mul(0.08)).clamp(0, 1)
+  )
+  const revealColor = finalColor.mul(revealShade)
+  const revealedColor = mix(revealColor, finalColor, revealAmount)
+  const revealedRoughness = mix(
+    finalRoughness.add(0.015).clamp(0, 1),
+    finalRoughness,
+    revealAmount
+  )
+  const revealedMetalness = mix(float(0), finalMetalness, revealAmount)
+  const revealedNormal = mix(
+    terrainUp.normalize(),
+    softenedNormal,
+    revealAmount
+  ).normalize()
 
   const material = new MeshStandardNodeMaterial()
   material.name = 'TerrainChunkMaterial'
-  material.colorNode = finalColor
-  material.roughnessNode = finalRoughness
-  material.metalnessNode = finalMetalness
-  material.normalNode = transformNormalToView(softenedNormal)
+  material.wireframe = settings.wireframe ?? false
+  material.colorNode = revealedColor
+  material.roughnessNode = revealedRoughness
+  material.metalnessNode = revealedMetalness
+  material.normalNode = transformNormalToView(revealedNormal)
 
   return material
 }

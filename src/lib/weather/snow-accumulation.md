@@ -15,6 +15,10 @@ Each terrain vertex stores one snow number.
 
 The terrain material reads that value and decides how much the ground should whiten. soften. and lose rocky detail.
 
+That means the mesh shape stays stable.
+
+The snow effect mostly lives in surface appearance. not in geometry displacement.
+
 ## Why this is the right split
 
 Trying to make every snowflake hit the ground and change the terrain would be the wrong level of simulation for this project.
@@ -41,6 +45,12 @@ Instead we upload the stable chunk data once.
 
 Then the compute pass updates the live snow coverage buffer directly on the GPU.
 
+That gives us the important benefit.
+
+- The CPU does not walk every terrain vertex every update.
+- The terrain mesh does not have to be rebuilt just because the snow changed.
+- The shader can react immediately to the new coverage values.
+
 ## What the simulation uses
 
 The update rule is intentionally simple and stable.
@@ -66,6 +76,26 @@ So snow accumulation follows the same ownership model.
 That keeps the system aligned with the quadtree and worker pipeline.
 
 When a chunk is rebuilt. its snow state can be recreated against the new terrain data.
+
+This is also why it scales better than one giant planet wide accumulation texture.
+
+Only the chunks that matter right now need live snow state.
+
+## Why it is updated in a round robin pass
+
+The runtime does not update every active snow chunk every time the timer fires.
+
+It updates a subset. then continues from the next subset on the next step.
+
+That is called round robin.
+
+The goal is simple.
+
+- keep every chunk moving over time.
+- avoid one giant compute spike.
+- make frame pacing steadier while flying.
+
+So the snow still evolves everywhere near the player. just not all in the same instant.
 
 ## What is not in scope yet
 

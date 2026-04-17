@@ -1,5 +1,9 @@
 import type { TerrainSceneDebugState } from '@/components/terrain-scene'
 import type { TerrainDebugSettings } from '@/lib/debug/terrain-debug'
+import {
+  applyTerrainGenerationPreset,
+  type TerrainGenerationPresetName,
+} from '@/lib/terrain/terrain-settings'
 import type { ReactNode } from 'react'
 
 export interface TerrainDebugPanelProps {
@@ -28,7 +32,7 @@ export function TerrainDebugPanel({
               Debug
             </p>
             <p className="font-body mt-1 text-sm text-[#eef2f6]">
-              Tune terrain. weather. vegetation. and lighting.
+              Tune terrain. snow. and performance.
             </p>
           </div>
           <div className="flex gap-2">
@@ -51,7 +55,15 @@ export function TerrainDebugPanel({
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-[#dbe4ec]/82 sm:grid-cols-5">
+        <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-[#dbe4ec]/82 sm:grid-cols-4">
+          <StatChip
+            label="FPS"
+            value={debugState ? formatFloat(debugState.fps, 1) : '...'}
+          />
+          <StatChip
+            label="Frame ms"
+            value={debugState ? formatFloat(debugState.frameMs, 1) : '...'}
+          />
           <StatChip
             label="Chunks"
             value={debugState ? String(debugState.chunkCount) : '...'}
@@ -61,22 +73,87 @@ export function TerrainDebugPanel({
             value={debugState ? formatCount(debugState.triangleCount) : '...'}
           />
           <StatChip
-            label="SAB"
-            value={debugState ? String(debugState.sharedBufferChunks) : '...'}
+            label="Draws"
+            value={debugState ? formatCount(debugState.drawCalls) : '...'}
           />
           <StatChip
-            label="Trees"
-            value={debugState ? formatCount(debugState.treeCount) : '...'}
+            label="Geom"
+            value={debugState ? formatCount(debugState.geometries) : '...'}
           />
           <StatChip
-            label="LOD"
-            value={debugState ? formatLodCounts(debugState.lodCounts) : '...'}
+            label="Tex"
+            value={debugState ? formatCount(debugState.textureCount) : '...'}
+          />
+          <StatChip
+            label="Queue"
+            value={
+              debugState
+                ? `P${debugState.pendingChunkCommits} . I${debugState.inflightChunkRequests}`
+                : '...'
+            }
           />
         </div>
 
         {isOpen ? (
           <div className="mt-4 max-h-[58dvh] space-y-4 overflow-y-auto pr-1">
             <DebugSection title="Terrain shape">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {TERRAIN_PRESET_BUTTONS.map((preset) => (
+                  <button
+                    className="font-body rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left text-xs text-[#e3e9ef] transition hover:bg-white/8"
+                    key={preset.value}
+                    onClick={() => {
+                      onSettingsChange({
+                        ...settings,
+                        terrainGeneration: applyTerrainGenerationPreset(
+                          preset.value,
+                          settings.terrainGeneration.seed
+                        ),
+                      })
+                    }}
+                    type="button"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="font-body rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-[#f4f7fb]"
+                  onClick={() => {
+                    onSettingsChange({
+                      ...settings,
+                      terrainGeneration: {
+                        ...settings.terrainGeneration,
+                        seed: getNextTerrainSeed(),
+                      },
+                    })
+                  }}
+                  type="button"
+                >
+                  New seed
+                </button>
+                <InfoPill
+                  label="Seed"
+                  value={String(settings.terrainGeneration.seed)}
+                />
+              </div>
+              <SliderControl
+                label="Terrain seed"
+                max={999}
+                min={0}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    terrainGeneration: {
+                      ...settings.terrainGeneration,
+                      seed: Math.round(value),
+                    },
+                  })
+                }}
+                step={1}
+                value={settings.terrainGeneration.seed}
+              />
               <SliderControl
                 label="Height scale"
                 max={2.25}
@@ -92,6 +169,38 @@ export function TerrainDebugPanel({
                 }}
                 step={0.05}
                 value={settings.terrainGeneration.heightScale}
+              />
+              <SliderControl
+                label="Broad strength"
+                max={2.5}
+                min={0}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    terrainGeneration: {
+                      ...settings.terrainGeneration,
+                      broadStrength: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.terrainGeneration.broadStrength}
+              />
+              <SliderControl
+                label="Broad scale"
+                max={2.2}
+                min={0.45}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    terrainGeneration: {
+                      ...settings.terrainGeneration,
+                      broadScale: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.terrainGeneration.broadScale}
               />
               <SliderControl
                 label="Detail strength"
@@ -110,6 +219,22 @@ export function TerrainDebugPanel({
                 value={settings.terrainGeneration.detailStrength}
               />
               <SliderControl
+                label="Detail scale"
+                max={2.4}
+                min={0.45}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    terrainGeneration: {
+                      ...settings.terrainGeneration,
+                      detailScale: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.terrainGeneration.detailScale}
+              />
+              <SliderControl
                 label="Ridge strength"
                 max={2.5}
                 min={0}
@@ -126,6 +251,22 @@ export function TerrainDebugPanel({
                 value={settings.terrainGeneration.ridgeStrength}
               />
               <SliderControl
+                label="Ridge scale"
+                max={2.6}
+                min={0.45}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    terrainGeneration: {
+                      ...settings.terrainGeneration,
+                      ridgeScale: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.terrainGeneration.ridgeScale}
+              />
+              <SliderControl
                 label="Crater strength"
                 max={2.5}
                 min={0}
@@ -140,6 +281,22 @@ export function TerrainDebugPanel({
                 }}
                 step={0.05}
                 value={settings.terrainGeneration.craterStrength}
+              />
+              <SliderControl
+                label="Crater scale"
+                max={2.4}
+                min={0.45}
+                onChange={(value) => {
+                  onSettingsChange({
+                    ...settings,
+                    terrainGeneration: {
+                      ...settings.terrainGeneration,
+                      craterScale: value,
+                    },
+                  })
+                }}
+                step={0.05}
+                value={settings.terrainGeneration.craterScale}
               />
             </DebugSection>
 
@@ -306,67 +463,47 @@ export function TerrainDebugPanel({
               />
             </DebugSection>
 
-            <DebugSection title="Vegetation">
+            <DebugSection title="Performance">
               <ToggleControl
-                checked={settings.vegetation.enabled}
-                label="Dead trees enabled"
+                checked={settings.performance.showWireframe}
+                label="Wireframe terrain"
                 onChange={(checked) => {
                   onSettingsChange({
                     ...settings,
-                    vegetation: {
-                      ...settings.vegetation,
-                      enabled: checked,
+                    performance: {
+                      ...settings.performance,
+                      showWireframe: checked,
                     },
                   })
                 }}
               />
               <SliderControl
-                label="Tree density"
-                max={2.4}
-                min={0}
+                label="Render scale"
+                max={1.1}
+                min={0.45}
                 onChange={(value) => {
                   onSettingsChange({
                     ...settings,
-                    vegetation: {
-                      ...settings.vegetation,
-                      density: value,
+                    performance: {
+                      ...settings.performance,
+                      renderScale: value,
                     },
                   })
                 }}
                 step={0.05}
-                value={settings.vegetation.density}
+                value={settings.performance.renderScale}
               />
-              <SliderControl
-                label="Tree height"
-                max={1.8}
-                min={0.55}
-                onChange={(value) => {
-                  onSettingsChange({
-                    ...settings,
-                    vegetation: {
-                      ...settings.vegetation,
-                      heightScale: value,
-                    },
-                  })
-                }}
-                step={0.05}
-                value={settings.vegetation.heightScale}
+              <InfoRow
+                label="LOD split"
+                value={debugState ? formatLodCounts(debugState.lodCounts) : '...'}
               />
-              <SliderControl
-                label="Tree LOD range"
-                max={2}
-                min={0}
-                onChange={(value) => {
-                  onSettingsChange({
-                    ...settings,
-                    vegetation: {
-                      ...settings.vegetation,
-                      maxLodLevel: Math.round(value),
-                    },
-                  })
-                }}
-                step={1}
-                value={settings.vegetation.maxLodLevel}
+              <InfoRow
+                label="SAB chunks"
+                value={debugState ? String(debugState.sharedBufferChunks) : '...'}
+              />
+              <InfoRow
+                label="Snow states"
+                value={debugState ? String(debugState.snowChunkCount) : '...'}
               />
             </DebugSection>
 
@@ -444,6 +581,36 @@ function DebugSection({
   )
 }
 
+const TERRAIN_PRESET_BUTTONS: Array<{
+  label: string
+  value: TerrainGenerationPresetName
+}> = [
+  { label: 'Blasted', value: 'blasted' },
+  { label: 'Alpine', value: 'alpine' },
+  { label: 'Fractured', value: 'fractured' },
+  { label: 'Cratered', value: 'cratered' },
+  { label: 'Plains', value: 'plains' },
+]
+
+function InfoPill({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div className="font-body flex items-center gap-2 rounded-full border border-white/10 bg-white/4 px-3 py-1 text-xs text-[#d2dbe3]">
+      <span className="text-[#aeb9c3]">{label}</span>
+      <span className="text-[#f4f7fb]">{value}</span>
+    </div>
+  )
+}
+
+function getNextTerrainSeed() {
+  return Math.floor(Math.random() * 1000)
+}
+
 function SliderControl({
   label,
   max,
@@ -517,9 +684,25 @@ function StatChip({ label, value }: { label: string; value: string }) {
   )
 }
 
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/4 px-3 py-2">
+      <span className="font-body text-xs text-[#eef2f6]">{label}</span>
+      <span className="font-body text-[11px] text-[#c7d1db]/72">{value}</span>
+    </div>
+  )
+}
+
 function formatCount(value: number) {
   return new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 0,
+  }).format(value)
+}
+
+function formatFloat(value: number, fractionDigits: number) {
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: fractionDigits,
+    minimumFractionDigits: fractionDigits,
   }).format(value)
 }
 

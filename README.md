@@ -62,14 +62,6 @@ Steep zones pull in rocky rubble at any height.
 
 This gives the planet a worn. cold. patina heavy surface language. It reads well from orbit and from a low fly pass.
 
-The terrain also supports a sparse dead tree layer.
-
-Those trees are leafless. bark only. and intentionally restrained.
-
-The goal is not to turn the planet into a forest.
-
-The goal is to add a little more scale language and war torn silhouette without overwhelming the terrain.
-
 ## Why the rendering path is modern
 
 The project uses `three/webgpu` for the rendering backend.
@@ -117,10 +109,13 @@ Mixed LOD borders use two protections.
 
 - Edge morphing.
 - Skirts.
+- Fog tinted chunk reveal smoothing.
 
 Edge morphing helps stop visible cracks when one chunk is denser than its neighbor.
 
 Skirts give a cheap visual seal under the edge.
+
+Fog tinted reveal smoothing helps hide chunk pop when a new chunk arrives. New terrain starts close to the scene fog tone and ramps into full detail over a short window instead of appearing fully formed in one frame.
 
 This is a common terrain trick. It is simple. robust. and fast.
 
@@ -137,6 +132,12 @@ This is one of the biggest practical wins in the project.
 Without workers. streamed terrain tends to hitch.
 
 With workers. the app feels much smoother.
+
+The runtime also queues finished worker results and commits only a small batch per frame. That stops chunk replies from landing as one large React spike on the main thread.
+
+The scene also exposes performance focused debug data while you tune it.
+
+That includes fps. frame time. draw calls. geometry count. texture count. queued chunk commits. and inflight worker requests.
 
 ## SharedArrayBuffer
 
@@ -202,6 +203,23 @@ The result is much more stable on cliffs and harsh angles.
 
 This is especially useful on a planet where slope direction changes constantly.
 
+## Terrain tuning
+
+The terrain debug panel can now change the shape rules in real time.
+
+It has knobs for.
+
+- Terrain presets and a live seed remixer.
+- Height scale.
+- Broad noise strength and scale.
+- Detail noise strength and scale.
+- Ridge noise strength and scale.
+- Crater strength and scale.
+
+That means you can push the same terrain system toward softer rolling forms. harsher broken ridges. or noisier cratered surfaces without changing source code.
+
+The seed control is important because it changes the sampled noise offsets in a stable way. So you get a different world layout while keeping the same terrain pipeline and the same deterministic chunk streaming rules.
+
 ## Snow system
 
 Snow is handled as a GPU driven particle field.
@@ -222,29 +240,17 @@ Instead the terrain owns a per chunk snow coverage field that is updated through
 
 That field then feeds the terrain material.
 
+The runtime does not update every active snow chunk on every tick.
+
+It rotates through them in a round robin pass.
+
+That keeps the total snow simulation work spread across frames instead of creating one large spike.
+
 This is the practical split.
 
 - particles for atmosphere.
 - accumulation for simulation.
 - terrain shading for final appearance.
-
-## Vegetation system
-
-The dead trees use the same chunked world model as the terrain.
-
-Each visible chunk can deterministically place a sparse set of trees from its chunk key and terrain samples.
-
-That means the same chunk always grows the same trees.
-
-There is no noisy rerolling when chunks stream back in.
-
-The runtime renders those trees as instanced meshes.
-
-That keeps the scene much lighter than spawning a full mesh object for every single trunk.
-
-The bark textures are KTX2 as well.
-
-That keeps the vegetation path consistent with the rest of the project.
 
 ## Sky and lighting
 
@@ -281,6 +287,22 @@ Controls.
 - `Esc` to unlock the pointer.
 
 The fly controller keeps a minimum terrain clearance floor. So it does not accidentally sink below the planet surface.
+
+## Debug overlay
+
+The debug overlay is meant to teach how the runtime behaves.
+
+It can show.
+
+- Fps and frame time.
+- Terrain triangle count.
+- Draw calls.
+- Geometry and texture counts.
+- SharedArrayBuffer backed chunk count.
+- Inflight worker requests and queued chunk commits.
+- Current LOD split.
+
+It also has a wireframe terrain toggle and a render scale slider for fast performance testing.
 
 ## Project structure
 
@@ -329,7 +351,10 @@ All in one small project that is still readable.
 
 - Terrain streaming and chunk generation. `src/lib/terrain/README.md`
 - Scene integration and modes. `src/components/terrain-scene.md`
+- Scene chunk scheduling. `src/components/terrain-scene-streaming.md`
+- Debug overlay and tuning. `src/components/terrain-debug-panel.md`
 - Fly camera math. `src/lib/camera/README.md`
 - Fly controller runtime bridge. `src/components/fly-camera-controller.md`
 - Weather and snow particles. `src/lib/weather/README.md`
+- Snow accumulation. `src/lib/weather/snow-accumulation.md`
 - Sky and environment lighting. `src/lib/sky/README.md`

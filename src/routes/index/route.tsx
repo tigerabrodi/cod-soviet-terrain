@@ -34,7 +34,7 @@ function HomePage() {
   const [debugState, setDebugState] = useState<TerrainSceneDebugState | null>(
     null
   )
-  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(false)
+  const [isDebugPanelOpen, setIsDebugPanelOpen] = useState(true)
   const [debugSettings, setDebugSettings] = useState<TerrainDebugSettings>(
     () => {
       if (typeof window === 'undefined') {
@@ -52,9 +52,6 @@ function HomePage() {
   )
   const [debouncedTerrainMaterial, setDebouncedTerrainMaterial] = useState(
     debugSettings.terrainMaterial
-  )
-  const [debouncedVegetation, setDebouncedVegetation] = useState(
-    debugSettings.vegetation
   )
 
   useEffect(() => {
@@ -77,21 +74,10 @@ function HomePage() {
     }
   }, [debugSettings.terrainMaterial])
 
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      setDebouncedVegetation(debugSettings.vegetation)
-    }, 120)
-
-    return () => {
-      window.clearTimeout(timeoutId)
-    }
-  }, [debugSettings.vegetation])
-
   const sceneDebugSettings: TerrainDebugSettings = {
     ...debugSettings,
     terrainGeneration: debouncedTerrainGeneration,
     terrainMaterial: debouncedTerrainMaterial,
-    vegetation: debouncedVegetation,
   }
 
   useEffect(() => {

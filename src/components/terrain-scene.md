@@ -8,9 +8,9 @@ This component is the live bridge between the pure terrain systems and the runni
 - Terrain material loading.
 - Worker pool lifetime.
 - Planet chunk diffing and chunk request priority.
+- Queued chunk commit flushing and chunk reveal smoothing.
 - Inspect mode and fly mode.
 - Snow and sky scene integration.
-- Dead tree scene integration.
 - Snow accumulation compute scheduling and chunk snow state lifetime.
 - Floating origin display offset.
 - Small browser debug helpers.
@@ -22,9 +22,11 @@ This component is the live bridge between the pure terrain systems and the runni
 - The fly controller math lives in `src/lib/camera`. That keeps camera feel work separate from terrain streaming.
 - The scene layer only handles integration. loading. mesh lifetime. camera hookup. and runtime checks.
 - The snow accumulation state lives next to the chunk runtime state instead of React state. That keeps the compute loop off the rerender path.
-- The dead tree placement rules stay outside the scene layer. The scene only owns instanced rendering and asset hookup.
+- New chunks reveal from a fog tinted state instead of appearing at full strength in one frame. That hides visible pop without using transparent terrain sorting.
+- Fly mode streams against a slightly lower overview underlay. That way a slow chunk handoff shows rough terrain instead of a flat shell.
+- Fly mode also pushes the streaming focus a bit ahead of the camera movement direction. That lets chunk requests start sooner when moving fast.
 - The world render offset lives in a single group. That lets the fly camera move without forcing every terrain mesh prop to be recomputed through React on every frame.
-- The scene exports a compact debug state with chunk count. triangle count. LOD split. and SharedArrayBuffer usage so the UI can teach what the renderer is doing.
+- The scene exports a compact debug state with fps. draw calls. chunk count. triangle count. queue pressure. LOD split. and SharedArrayBuffer usage so the UI can teach what the renderer is doing.
 
 ## Camera modes
 
@@ -39,6 +41,7 @@ This component is the live bridge between the pure terrain systems and the runni
 - Starts just above the terrain shell.
 - Uses pointer lock mouse look and six axis movement.
 - Keeps a terrain clearance floor so the camera does not drop under the surface.
+- Streams terrain a little ahead of the current movement direction so the camera does not outrun the chunk window as easily.
 - Best for close terrain passes and checking scale.
 
 ## Runtime debug hook

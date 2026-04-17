@@ -2,8 +2,8 @@ import { FlyCameraController } from '@/components/fly-camera-controller'
 import {
   takeSnowChunksForSimulation,
   useTerrainChunkStreaming,
+  type TerrainChunkRuntime,
 } from '@/components/terrain-scene-streaming'
-import { TerrainTrees } from '@/components/terrain-trees'
 import {
   INITIAL_ORBIT_CAMERA_POSITION,
   getModeSetup,
@@ -18,7 +18,7 @@ import {
 } from '@/components/terrain-scene-runtime'
 import {
   applyCameraSetup,
-  createPlanetBackdropGeometry,
+  createPlanetOverviewGeometry,
   edgeMorphEquals,
 } from '@/components/terrain-scene-utils'
 import type { TerrainDebugSettings } from '@/lib/debug/terrain-debug'
@@ -42,11 +42,12 @@ import {
   type SnowAccumulationRuntimeState,
   type SnowAccumulationSettings,
 } from '@/lib/weather/snow-accumulation'
+import { getTerrainChunkRevealFactor } from '@/lib/terrain/terrain-chunk-transition'
 import { createSkyDomeGeometry } from '@/lib/sky/sky-dome'
 import { loadSkyEnvironment } from '@/lib/sky/sky-environment'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Euler } from 'three'
+import { Euler, type Float32BufferAttribute } from 'three'
 import {
   ACESFilmicToneMapping,
   Color,
@@ -75,15 +76,31 @@ export interface TerrainSceneDebugState {
   cameraFocusWorld: Vec3Like
   cameraMode: CameraMode
   chunkCount: number
+  drawCalls: number
+  fps: number
+  frameMs: number
+  geometries: number
+  inflightChunkRequests: number
   lodCounts: Record<number, number>
+  pendingChunkCommits: number
   sharedBufferChunks: number
-  treeCount: number
+  snowChunkCount: number
+  textureCount: number
   triangleCount: number
   worldOrigin: Vec3Like
 }
 
+interface PerformanceSnapshot {
+  drawCalls: number
+  fps: number
+  frameMs: number
+  geometries: number
+  textureCount: number
+}
+
 const PLANET_LOD_RESOLUTIONS = [64, 32, 16] as const
-const FOCUS_REFRESH_DISTANCE = 56
+const FLY_FOCUS_REFRESH_DISTANCE = 12
+const ORBIT_FOCUS_REFRESH_DISTANCE = 32
 const MAX_SNOW_CHUNKS_PER_STEP = 8
 const SNOW_SIMULATION_INTERVAL_SECONDS = 0.18
 
@@ -103,7 +120,7 @@ export function TerrainScene({
         position: [...INITIAL_ORBIT_CAMERA_POSITION],
       }}
       className="absolute inset-0 h-full w-full"
-      dpr={[1, 2]}
+      dpr={getCanvasDpr(debugSettings.performance.renderScale)}
       gl={createTerrainRenderer}
       shadows
     >
@@ -153,15 +170,26 @@ function TerrainWorld({
   const [skyEnvironment, setSkyEnvironment] = useState<Awaited<
     ReturnType<typeof loadSkyEnvironment>
   > | null>(null)
+  const [performanceSnapshot, setPerformanceSnapshot] =
+    useState<PerformanceSnapshot>({
+      drawCalls: 0,
+      fps: 0,
+      frameMs: 0,
+      geometries: 0,
+      textureCount: 0,
+    })
   const [worldOriginSnapshot, setWorldOriginSnapshot] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).worldOrigin
   )
   const [cameraFocusWorld, setCameraFocusWorld] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).cameraFocusWorld
   )
-  const [treeCountSnapshot, setTreeCountSnapshot] = useState(0)
+  const isPlanetOverviewVisible = cameraMode === 'orbit'
 
   const previousCameraModeRef = useRef<CameraMode | null>(null)
+  const performanceSampleAccumulatorRef = useRef(0)
+  const performanceSampleCountRef = useRef(0)
+  const performanceSampleFrameTimeRef = useRef(0)
   const snowStateLookupRef = useRef(new Map<string, SnowAccumulationRuntimeState>())
   const snowSimulationAccumulatorRef = useRef(0)
   const snowSimulationCursorRef = useRef(0)
@@ -195,29 +223,48 @@ function TerrainWorld({
         ? createTerrainMaterial(terrainTextures, {
             ...(debugSettings.terrainMaterial as TerrainMaterialSettings),
             snowAccumulationStrength: snowAccumulationSettings.visualStrength,
+            wireframe: debugSettings.performance.showWireframe,
           })
         : null,
-    [debugSettings.terrainMaterial, snowAccumulationSettings, terrainTextures]
+    [
+      debugSettings.performance.showWireframe,
+      debugSettings.terrainMaterial,
+      snowAccumulationSettings,
+      terrainTextures,
+    ]
   )
-  const planetBackdropGeometry = useMemo(
-    () => createPlanetBackdropGeometry(debugSettings.terrainGeneration),
+  const planetOverviewGeometry = useMemo(
+    () => createPlanetOverviewGeometry(debugSettings.terrainGeneration),
+    [debugSettings.terrainGeneration]
+  )
+  const planetFlyUnderlayGeometry = useMemo(
+    () =>
+      createPlanetOverviewGeometry(debugSettings.terrainGeneration, {
+        heightBias: -4,
+        heightSegments: 56,
+        snowCoverageScale: 0.34,
+        widthSegments: 96,
+      }),
     [debugSettings.terrainGeneration]
   )
   const desiredChunkDescriptors = useMemo(
     () =>
-      selectPlanetChunkWindow(
-        cameraFocusWorld,
-        PLANET_LOD_RESOLUTIONS,
-        PLANET_RADIUS
-      ),
-    [cameraFocusWorld]
+      cameraMode === 'orbit'
+        ? []
+        : selectPlanetChunkWindow(
+            cameraFocusWorld,
+            PLANET_LOD_RESOLUTIONS,
+            PLANET_RADIUS
+          ),
+    [cameraFocusWorld, cameraMode]
   )
   const desiredEdgeMorphs = useMemo(
     () => getPlanetChunkEdgeMorphs(desiredChunkDescriptors),
     [desiredChunkDescriptors]
   )
 
-  const { terrainChunks, terrainChunksRef } = useTerrainChunkStreaming({
+  const { runtimeStatsRef, terrainChunks, terrainChunksRef } =
+    useTerrainChunkStreaming({
     cameraFocusWorld,
     desiredChunkDescriptors,
     desiredEdgeMorphs,
@@ -242,7 +289,9 @@ function TerrainWorld({
     )
   })
   const isSceneReady =
-    terrainMaterial !== null && skyEnvironment !== null && isTerrainWindowReady
+    terrainMaterial !== null &&
+    skyEnvironment !== null &&
+    (cameraMode === 'orbit' || isTerrainWindowReady)
 
   useEffect(() => {
     const previousCameraMode = previousCameraModeRef.current
@@ -370,11 +419,18 @@ function TerrainWorld({
       cameraFocusWorld,
       cameraMode,
       chunkCount: activeTerrainChunks.length,
+      drawCalls: performanceSnapshot.drawCalls,
+      fps: performanceSnapshot.fps,
+      frameMs: performanceSnapshot.frameMs,
+      geometries: performanceSnapshot.geometries,
+      inflightChunkRequests: runtimeStatsRef.current.inflightChunkCount,
       lodCounts,
+      pendingChunkCommits: runtimeStatsRef.current.pendingChunkCommitCount,
       sharedBufferChunks: activeTerrainChunks.filter(
         (terrainChunk) => terrainChunk.sharedArrayBufferBacked
       ).length,
-      treeCount: treeCountSnapshot,
+      snowChunkCount: snowStateLookupRef.current.size,
+      textureCount: performanceSnapshot.textureCount,
       triangleCount: activeTerrainChunks.reduce(
         (triangleTotal, terrainChunk) =>
           triangleTotal + (terrainChunk.geometry.index?.count ?? 0) / 3,
@@ -402,11 +458,36 @@ function TerrainWorld({
     cameraFocusWorld,
     cameraMode,
     onDebugStateChange,
-    treeCountSnapshot,
+    performanceSnapshot,
+    runtimeStatsRef,
     worldOriginSnapshot,
   ])
 
   useFrame((_, deltaTimeSeconds) => {
+    performanceSampleAccumulatorRef.current += deltaTimeSeconds
+    performanceSampleCountRef.current += 1
+    performanceSampleFrameTimeRef.current += deltaTimeSeconds * 1000
+
+    if (performanceSampleAccumulatorRef.current >= 0.3) {
+      const rendererStats = readRendererStats(gl)
+
+      setPerformanceSnapshot({
+        drawCalls: rendererStats.drawCalls,
+        fps:
+          performanceSampleCountRef.current /
+          performanceSampleAccumulatorRef.current,
+        frameMs:
+          performanceSampleFrameTimeRef.current /
+          performanceSampleCountRef.current,
+        geometries: rendererStats.geometries,
+        textureCount: rendererStats.textureCount,
+      })
+
+      performanceSampleAccumulatorRef.current = 0
+      performanceSampleCountRef.current = 0
+      performanceSampleFrameTimeRef.current = 0
+    }
+
     const snowStates = snowStateLookupRef.current
 
     if (snowStates.size === 0) {
@@ -475,9 +556,15 @@ function TerrainWorld({
 
   useEffect(() => {
     return () => {
-      planetBackdropGeometry.dispose()
+      planetOverviewGeometry.dispose()
     }
-  }, [planetBackdropGeometry])
+  }, [planetOverviewGeometry])
+
+  useEffect(() => {
+    return () => {
+      planetFlyUnderlayGeometry.dispose()
+    }
+  }, [planetFlyUnderlayGeometry])
 
   return (
     <>
@@ -509,49 +596,41 @@ function TerrainWorld({
         shadow-mapSize-width={2048}
       />
       <WorldOriginAnchor originRef={worldOriginRef}>
-        <mesh geometry={planetBackdropGeometry} receiveShadow>
-          <meshStandardMaterial color="#544c45" roughness={1} />
-        </mesh>
-        <mesh receiveShadow>
-          <sphereGeometry args={[PLANET_RADIUS - 24, 48, 28]} />
-          <meshStandardMaterial color="#0e151c" roughness={1} />
-        </mesh>
-        {activeTerrainChunks.map((terrainChunk) => (
-          <mesh
-            geometry={terrainChunk.geometry}
-            key={terrainChunk.key}
-            material={terrainMaterial ?? undefined}
-            position={terrainChunk.buildOrigin}
-            receiveShadow
-          >
-            {terrainMaterial ? null : (
-              <meshStandardMaterial
-                color="#616971"
-                metalness={0.02}
-                roughness={0.95}
-              />
-            )}
-          </mesh>
-        ))}
-        <TerrainTrees
-          chunks={activeTerrainChunks}
-          onTreeCountChange={setTreeCountSnapshot}
-          terrainSettings={debugSettings.terrainGeneration}
-          vegetationSettings={debugSettings.vegetation}
+        <mesh
+          geometry={planetOverviewGeometry}
+          material={terrainMaterial ?? undefined}
+          receiveShadow
+          visible={isPlanetOverviewVisible}
         />
+        <mesh
+          geometry={planetFlyUnderlayGeometry}
+          material={terrainMaterial ?? undefined}
+          receiveShadow
+          visible={!isPlanetOverviewVisible}
+        />
+        {isPlanetOverviewVisible
+          ? null
+          : activeTerrainChunks.map((terrainChunk) => (
+          <TerrainChunkMesh
+            fallbackWireframe={debugSettings.performance.showWireframe}
+            key={terrainChunk.key}
+            terrainChunk={terrainChunk}
+            terrainMaterial={terrainMaterial}
+          />
+        ))}
       </WorldOriginAnchor>
       {cameraMode === 'orbit' ? (
         <>
           <FloatingOriginTracker
             cameraFocusWorld={cameraFocusWorld}
-            focusRefreshDistance={FOCUS_REFRESH_DISTANCE}
+            focusRefreshDistance={ORBIT_FOCUS_REFRESH_DISTANCE}
             onCameraFocusWorldChange={setCameraFocusWorld}
           />
           <OrbitCamera />
         </>
       ) : (
         <FlyCameraController
-          focusRefreshDistance={FOCUS_REFRESH_DISTANCE}
+          focusRefreshDistance={FLY_FOCUS_REFRESH_DISTANCE}
           onCameraFocusWorldChange={setCameraFocusWorld}
           onWorldOriginSnapshotChange={setWorldOriginSnapshot}
           terrainSettings={debugSettings.terrainGeneration}
@@ -566,4 +645,101 @@ function TerrainWorld({
       )}
     </>
   )
+}
+
+function TerrainChunkMesh({
+  fallbackWireframe,
+  terrainChunk,
+  terrainMaterial,
+}: {
+  fallbackWireframe: boolean
+  terrainChunk: TerrainChunkRuntime
+  terrainMaterial: ReturnType<typeof createTerrainMaterial> | null
+}) {
+  const revealAttributeRef = useRef<Float32BufferAttribute | null>(null)
+  const lastRevealRef = useRef(-1)
+
+  useFrame(() => {
+    const revealAttribute = revealAttributeRef.current
+
+    if (!revealAttribute || lastRevealRef.current >= 1) {
+      return
+    }
+
+    const revealFactor = getTerrainChunkRevealFactor(
+      performance.now() * 0.001 - terrainChunk.revealStartedAtSeconds
+    )
+
+    if (revealFactor === lastRevealRef.current) {
+      return
+    }
+
+    ;(revealAttribute.array as Float32Array).fill(revealFactor)
+    revealAttribute.needsUpdate = true
+    lastRevealRef.current = revealFactor
+  })
+
+  useEffect(() => {
+    const revealAttribute = terrainChunk.geometry.getAttribute(
+      'chunkReveal'
+    ) as Float32BufferAttribute | null
+
+    revealAttributeRef.current = revealAttribute
+
+    if (!revealAttribute) {
+      return
+    }
+
+    ;(revealAttribute.array as Float32Array).fill(0)
+    revealAttribute.needsUpdate = true
+    lastRevealRef.current = 0
+  }, [terrainChunk.geometry, terrainChunk.revealStartedAtSeconds])
+
+  return (
+    <mesh
+      geometry={terrainChunk.geometry}
+      material={terrainMaterial ?? undefined}
+      position={terrainChunk.buildOrigin}
+      receiveShadow
+    >
+      {terrainMaterial ? null : (
+        <meshStandardMaterial
+          color="#616971"
+          metalness={0.02}
+          roughness={0.95}
+          wireframe={fallbackWireframe}
+        />
+      )}
+    </mesh>
+  )
+}
+
+function getCanvasDpr(renderScale: number) {
+  if (typeof window === 'undefined') {
+    return 1
+  }
+
+  return Math.min(2, Math.max(0.6, window.devicePixelRatio * renderScale))
+}
+
+function readRendererStats(renderer: unknown) {
+  const info = (
+    renderer as {
+      info?: {
+        memory?: {
+          geometries?: number
+          textures?: number
+        }
+        render?: {
+          calls?: number
+        }
+      }
+    }
+  ).info
+
+  return {
+    drawCalls: info?.render?.calls ?? 0,
+    geometries: info?.memory?.geometries ?? 0,
+    textureCount: info?.memory?.textures ?? 0,
+  }
 }

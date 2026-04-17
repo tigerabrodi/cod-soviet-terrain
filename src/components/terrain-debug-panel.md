@@ -4,20 +4,22 @@ This panel exists to make the terrain sandbox easier to study.
 
 ## What it controls
 
-- Terrain generation strength values.
+- Terrain generation presets. seed. strength values. and scale values.
 - Terrain material response values.
-- Dead tree density. size. and LOD range.
 - Snow and weather values.
 - Ground snow accumulation rate. melt rate. wind loss. and visual strength.
+- Performance controls like wireframe terrain and render scale.
 - Lighting and fog values.
 
 ## Why it is useful
 
 - Terrain generation now runs through workers and a runtime settings object. That means the panel can rebuild real chunk data instead of faking a UI only preview.
+- Terrain presets let you jump between very different landform families quickly. The seed then remixes the same preset into a different version without changing the overall style.
 - Weather and lighting can be tuned live without touching source files.
-- The stats row shows chunk count. triangle count. SharedArrayBuffer chunk count. and the current quadtree LOD split.
+- The stats row shows fps. frame time. terrain triangle count. draw calls. geometry and texture counts. and live chunk queue pressure.
+- The performance section exposes the current LOD split. SharedArrayBuffer chunk count. and active snow state count.
 
-## Why the UI is small
+## Why the UI now opens by default
 
-- It is meant for tuning and learning. not for being part of the core art direction.
-- The panel defaults to a compact footprint and can be collapsed so the terrain still owns the screen.
+- The terrain shape controls are one of the main reasons this sandbox exists.
+- The panel can still be collapsed. but it now starts open so the terrain lab controls are not hidden on first load.

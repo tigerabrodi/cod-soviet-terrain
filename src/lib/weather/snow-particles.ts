@@ -1,7 +1,7 @@
 import type { CompressedTexture } from 'three'
 import { getSharedKTX2Loader } from '@/lib/shared/ktx2-loader'
 
-export const SNOW_PARTICLE_COUNT = 9000
+export const SNOW_PARTICLE_COUNT = 6000
 export const SNOW_VOLUME_HEIGHT = 46
 export const SNOW_VOLUME_RADIUS = 54
 

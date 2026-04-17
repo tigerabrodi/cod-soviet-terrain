@@ -14,21 +14,25 @@ describe('clampTerrainDebugSettings', () => {
         fogDensity: -4,
         sunIntensity: 5,
       },
+      performance: {
+        renderScale: 8,
+        showWireframe: true,
+      },
       terrainGeneration: {
+        broadScale: -1,
+        broadStrength: 9,
+        craterScale: 8,
         craterStrength: -3,
+        detailScale: 8,
         detailStrength: 9,
         heightScale: 20,
+        ridgeScale: -3,
         ridgeStrength: -2,
+        seed: 4000,
       },
       terrainMaterial: {
         frostStrength: 5,
         textureScale: 0.1,
-      },
-      vegetation: {
-        density: 4,
-        enabled: true,
-        heightScale: 0.1,
-        maxLodLevel: 8,
       },
       weather: {
         accumulationRate: 9,
@@ -45,15 +49,20 @@ describe('clampTerrainDebugSettings', () => {
     expect(clamped.lighting.environmentIntensity).toBe(2)
     expect(clamped.lighting.fogDensity).toBe(0)
     expect(clamped.lighting.sunIntensity).toBe(2.4)
+    expect(clamped.performance.renderScale).toBe(1.1)
+    expect(clamped.performance.showWireframe).toBe(true)
+    expect(clamped.terrainGeneration.broadScale).toBe(0.45)
+    expect(clamped.terrainGeneration.broadStrength).toBe(2.5)
+    expect(clamped.terrainGeneration.detailScale).toBe(2.4)
+    expect(clamped.terrainGeneration.ridgeScale).toBe(0.45)
+    expect(clamped.terrainGeneration.craterScale).toBe(2.4)
     expect(clamped.terrainGeneration.heightScale).toBe(2.25)
     expect(clamped.terrainGeneration.detailStrength).toBe(2.5)
     expect(clamped.terrainGeneration.ridgeStrength).toBe(0)
     expect(clamped.terrainGeneration.craterStrength).toBe(0)
+    expect(clamped.terrainGeneration.seed).toBe(999)
     expect(clamped.terrainMaterial.textureScale).toBe(0.45)
     expect(clamped.terrainMaterial.frostStrength).toBe(2)
-    expect(clamped.vegetation.density).toBe(2.4)
-    expect(clamped.vegetation.heightScale).toBe(0.55)
-    expect(clamped.vegetation.maxLodLevel).toBe(2)
     expect(clamped.weather.accumulationRate).toBe(2.5)
     expect(clamped.weather.coverageStrength).toBe(2)
     expect(clamped.weather.snowDensity).toBe(0)
@@ -77,11 +86,13 @@ describe('parseTerrainDebugSettings', () => {
   it('merges partial stored state with defaults', () => {
     const parsed = parseTerrainDebugSettings(
       JSON.stringify({
-        terrainGeneration: {
-          heightScale: 1.4,
+        performance: {
+          showWireframe: true,
         },
-        vegetation: {
-          enabled: false,
+        terrainGeneration: {
+          broadScale: 1.4,
+          heightScale: 1.4,
+          seed: 73,
         },
         weather: {
           snowEnabled: false,
@@ -89,12 +100,14 @@ describe('parseTerrainDebugSettings', () => {
       })
     )
 
+    expect(parsed.performance.showWireframe).toBe(true)
+    expect(parsed.performance.renderScale).toBe(1)
+    expect(parsed.terrainGeneration.broadScale).toBe(1.4)
     expect(parsed.terrainGeneration.heightScale).toBe(1.4)
-    expect(parsed.vegetation.enabled).toBe(false)
-    expect(parsed.vegetation.density).toBe(0.9)
+    expect(parsed.terrainGeneration.seed).toBe(73)
     expect(parsed.weather.snowEnabled).toBe(false)
-    expect(parsed.weather.accumulationRate).toBe(0.35)
-    expect(parsed.weather.fallSpeed).toBe(1)
+    expect(parsed.weather.accumulationRate).toBe(0.32)
+    expect(parsed.weather.fallSpeed).toBe(0.58)
     expect(parsed.lighting.sunIntensity).toBe(1)
   })
 })
@@ -127,6 +140,6 @@ describe('getSnowParticleCount', () => {
         snowEnabled: true,
         windStrength: 1,
       })
-    ).toBe(4500)
+    ).toBe(3000)
   })
 })

@@ -57,6 +57,29 @@ describe('sampleTerrainHeight', () => {
       Math.abs(defaultHeight - terrainBaseline)
     )
   })
+
+  it('changes the terrain pattern when noise scales change', () => {
+    const defaultHeight = sampleTerrainHeight(24, -18)
+    const remixedHeight = sampleTerrainHeight(24, -18, {
+      ...DEFAULT_TERRAIN_GENERATION_SETTINGS,
+      broadScale: 1.4,
+      craterScale: 0.7,
+      detailScale: 1.8,
+      ridgeScale: 0.65,
+    })
+
+    expect(remixedHeight).not.toBeCloseTo(defaultHeight, 6)
+  })
+
+  it('changes the terrain pattern when the terrain seed changes', () => {
+    const defaultHeight = sampleTerrainHeight(24, -18)
+    const remixedHeight = sampleTerrainHeight(24, -18, {
+      ...DEFAULT_TERRAIN_GENERATION_SETTINGS,
+      seed: 287,
+    })
+
+    expect(remixedHeight).not.toBeCloseTo(defaultHeight, 6)
+  })
 })
 
 describe('buildTerrainChunk', () => {

@@ -16,11 +16,9 @@ export interface TerrainLightingDebugSettings {
   sunIntensity: number
 }
 
-export interface TerrainVegetationDebugSettings {
-  density: number
-  enabled: boolean
-  heightScale: number
-  maxLodLevel: number
+export interface TerrainPerformanceDebugSettings {
+  renderScale: number
+  showWireframe: boolean
 }
 
 export interface TerrainWeatherDebugSettings {
@@ -36,9 +34,9 @@ export interface TerrainWeatherDebugSettings {
 
 export interface TerrainDebugSettings {
   lighting: TerrainLightingDebugSettings
+  performance: TerrainPerformanceDebugSettings
   terrainGeneration: TerrainGenerationSettings
   terrainMaterial: TerrainMaterialDebugSettings
-  vegetation: TerrainVegetationDebugSettings
   weather: TerrainWeatherDebugSettings
 }
 
@@ -50,35 +48,33 @@ export const DEFAULT_TERRAIN_DEBUG_SETTINGS: TerrainDebugSettings = {
     fogDensity: 1,
     sunIntensity: 1,
   },
+  performance: {
+    renderScale: 1,
+    showWireframe: false,
+  },
   terrainGeneration: DEFAULT_TERRAIN_GENERATION_SETTINGS,
   terrainMaterial: {
     frostStrength: 1,
     textureScale: 1,
   },
-  vegetation: {
-    density: 0.9,
-    enabled: true,
-    heightScale: 1,
-    maxLodLevel: 1,
-  },
   weather: {
-    accumulationRate: 0.35,
-    coverageStrength: 0.85,
-    driftStrength: 1,
-    fallSpeed: 1,
-    meltRate: 0.28,
-    snowDensity: 1,
+    accumulationRate: 0.32,
+    coverageStrength: 0.9,
+    driftStrength: 0.85,
+    fallSpeed: 0.58,
+    meltRate: 0.22,
+    snowDensity: 0.56,
     snowEnabled: true,
-    windStrength: 0.55,
+    windStrength: 0.48,
   },
 }
 
 export function createDefaultTerrainDebugSettings(): TerrainDebugSettings {
   return {
     lighting: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.lighting },
+    performance: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.performance },
     terrainGeneration: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.terrainGeneration },
     terrainMaterial: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.terrainMaterial },
-    vegetation: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.vegetation },
     weather: { ...DEFAULT_TERRAIN_DEBUG_SETTINGS.weather },
   }
 }
@@ -94,18 +90,16 @@ export function clampTerrainDebugSettings(settings: TerrainDebugSettings) {
       fogDensity: clamp(settings.lighting.fogDensity, 0, 2.2),
       sunIntensity: clamp(settings.lighting.sunIntensity, 0.2, 2.4),
     },
+    performance: {
+      renderScale: clamp(settings.performance.renderScale, 0.45, 1.1),
+      showWireframe: settings.performance.showWireframe,
+    },
     terrainGeneration: clampTerrainGenerationSettings(
       settings.terrainGeneration
     ),
     terrainMaterial: {
       frostStrength: clamp(settings.terrainMaterial.frostStrength, 0, 2),
       textureScale: clamp(settings.terrainMaterial.textureScale, 0.45, 1.8),
-    },
-    vegetation: {
-      density: clamp(settings.vegetation.density, 0, 2.4),
-      enabled: settings.vegetation.enabled,
-      heightScale: clamp(settings.vegetation.heightScale, 0.55, 1.8),
-      maxLodLevel: Math.round(clamp(settings.vegetation.maxLodLevel, 0, 2)),
     },
     weather: {
       accumulationRate: clamp(settings.weather.accumulationRate, 0, 2.5),
@@ -136,6 +130,10 @@ export function parseTerrainDebugSettings(
         ...defaults.lighting,
         ...parsed.lighting,
       },
+      performance: {
+        ...defaults.performance,
+        ...parsed.performance,
+      },
       terrainGeneration: {
         ...defaults.terrainGeneration,
         ...parsed.terrainGeneration,
@@ -143,10 +141,6 @@ export function parseTerrainDebugSettings(
       terrainMaterial: {
         ...defaults.terrainMaterial,
         ...parsed.terrainMaterial,
-      },
-      vegetation: {
-        ...defaults.vegetation,
-        ...parsed.vegetation,
       },
       weather: {
         ...defaults.weather,
