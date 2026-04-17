@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   PLANET_RADIUS,
+  filterVisiblePlanetChunks,
   getCubeFacePoint,
+  getPlanetPointOnFace,
   getPlanetChunkEdgeMorphs,
   selectPlanetChunkWindow,
 } from './terrain-planet'
@@ -129,5 +131,90 @@ describe('getPlanetChunkEdgeMorphs', () => {
       south: 0,
       west: 0,
     })
+  })
+})
+
+describe('filterVisiblePlanetChunks', () => {
+  it('filters fine chunks that are behind the current camera view', () => {
+    const visibleChunks = filterVisiblePlanetChunks(
+      [
+        {
+          centerX: 90,
+          centerY: 0,
+          face: 'positive-z',
+          key: 'ahead-fine',
+          lodLevel: 0,
+          resolution: 64,
+          size: 180,
+          sphereCenter: getPlanetPointOnFace('positive-z', 90, 0),
+        },
+        {
+          centerX: -180,
+          centerY: 0,
+          face: 'positive-z',
+          key: 'behind-fine',
+          lodLevel: 0,
+          resolution: 64,
+          size: 180,
+          sphereCenter: getPlanetPointOnFace('positive-z', -180, 0),
+        },
+        {
+          centerX: -180,
+          centerY: 0,
+          face: 'positive-z',
+          key: 'behind-coarse',
+          lodLevel: 1,
+          resolution: 32,
+          size: 360,
+          sphereCenter: getPlanetPointOnFace('positive-z', -180, 0),
+        },
+      ],
+      {
+        cameraAspect: 16 / 9,
+        cameraForwardWorld: { x: 1, y: 0, z: 0 },
+        cameraVerticalFovDegrees: 38,
+        cameraWorldPosition: { x: 0, y: 0, z: PLANET_RADIUS + 24 },
+      }
+    )
+
+    expect(visibleChunks.map((chunk) => chunk.key)).toEqual([
+      'ahead-fine',
+      'behind-coarse',
+    ])
+  })
+
+  it('culls chunks that are fully beyond the planet horizon', () => {
+    const visibleChunks = filterVisiblePlanetChunks(
+      [
+        {
+          centerX: 0,
+          centerY: 0,
+          face: 'positive-z',
+          key: 'near-side',
+          lodLevel: 0,
+          resolution: 64,
+          size: 180,
+          sphereCenter: getPlanetPointOnFace('positive-z', 0, 0),
+        },
+        {
+          centerX: 0,
+          centerY: 0,
+          face: 'negative-z',
+          key: 'far-side',
+          lodLevel: 2,
+          resolution: 16,
+          size: 720,
+          sphereCenter: getPlanetPointOnFace('negative-z', 0, 0),
+        },
+      ],
+      {
+        cameraAspect: 16 / 9,
+        cameraForwardWorld: { x: 1, y: 0, z: 0 },
+        cameraVerticalFovDegrees: 38,
+        cameraWorldPosition: { x: 0, y: 0, z: PLANET_RADIUS + 24 },
+      }
+    )
+
+    expect(visibleChunks.map((chunk) => chunk.key)).toEqual(['near-side'])
   })
 })

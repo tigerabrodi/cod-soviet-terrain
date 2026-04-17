@@ -1,4 +1,5 @@
 export const DEFAULT_TERRAIN_CHUNK_REVEAL_SECONDS = 0.16
+export const MIN_TERRAIN_CHUNK_REVEAL_FACTOR = 0.18
 
 export function getTerrainChunkRevealFactor(
   elapsedSeconds: number,
@@ -8,5 +9,10 @@ export function getTerrainChunkRevealFactor(
     return 1
   }
 
-  return Math.max(0, Math.min(1, elapsedSeconds / durationSeconds))
+  const clampedProgress = Math.max(0, Math.min(1, elapsedSeconds / durationSeconds))
+
+  return (
+    MIN_TERRAIN_CHUNK_REVEAL_FACTOR +
+    (1 - MIN_TERRAIN_CHUNK_REVEAL_FACTOR) * clampedProgress
+  )
 }

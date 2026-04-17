@@ -28,6 +28,14 @@ export interface TerrainChunkEdgeMorph {
   west: number
 }
 
+export interface PlanetChunkVisibilityOptions {
+  cameraAspect: number
+  cameraForwardWorld: Vec3Like
+  cameraVerticalFovDegrees: number
+  cameraWorldPosition: Vec3Like
+  planetRadius?: number
+}
+
 export interface Vec3Like {
   x: number
   y: number
@@ -168,6 +176,44 @@ export function selectPlanetChunkWindow(
     }
 
     return left.centerX - right.centerX
+  })
+}
+
+export function filterVisiblePlanetChunks<T extends PlanetChunkDescriptor>(
+  chunkWindow: ReadonlyArray<T>,
+  {
+    cameraAspect,
+    cameraForwardWorld,
+    cameraVerticalFovDegrees,
+    cameraWorldPosition,
+    planetRadius = PLANET_RADIUS,
+  }: PlanetChunkVisibilityOptions
+) {
+  const safeCameraAspect = Math.max(1, cameraAspect)
+  const normalizedCameraForward = normalizeVec3(cameraForwardWorld)
+
+  if (lengthVec3(normalizedCameraForward) <= 0.000001) {
+    return [...chunkWindow]
+  }
+
+  return chunkWindow.filter((chunk) => {
+    if (
+      !isPlanetChunkAboveHorizon(chunk, cameraWorldPosition, planetRadius)
+    ) {
+      return false
+    }
+
+    if (chunk.lodLevel > 0) {
+      return true
+    }
+
+    return isPlanetChunkInsideViewCone(
+      chunk,
+      cameraWorldPosition,
+      normalizedCameraForward,
+      safeCameraAspect,
+      cameraVerticalFovDegrees
+    )
   })
 }
 
@@ -355,8 +401,114 @@ function shouldSubdividePlanetChunk(
   )
 }
 
+function isPlanetChunkAboveHorizon(
+  chunk: PlanetChunkDescriptor,
+  cameraWorldPosition: Vec3Like,
+  planetRadius: number
+) {
+  const cameraDistance = lengthVec3(cameraWorldPosition)
+
+  if (cameraDistance <= planetRadius + 0.000001) {
+    return true
+  }
+
+  const chunkDirection = normalizeVec3(chunk.sphereCenter)
+  const cameraDirection = normalizeVec3(cameraWorldPosition)
+  const horizonAngle = Math.acos(
+    clamp(planetRadius / cameraDistance, -1, 1)
+  )
+  const chunkAngularRadius = Math.asin(
+    clamp(
+      getPlanetChunkBoundingRadius(chunk) /
+        Math.max(lengthVec3(chunk.sphereCenter), 0.000001),
+      0,
+      0.999
+    )
+  )
+  const visibilityThreshold = Math.cos(
+    horizonAngle + chunkAngularRadius + 0.12
+  )
+
+  return dotVec3(cameraDirection, chunkDirection) >= visibilityThreshold
+}
+
+function isPlanetChunkInsideViewCone(
+  chunk: PlanetChunkDescriptor,
+  cameraWorldPosition: Vec3Like,
+  cameraForwardWorld: Vec3Like,
+  cameraAspect: number,
+  cameraVerticalFovDegrees: number
+) {
+  const toChunk = subtractVec3(chunk.sphereCenter, cameraWorldPosition)
+  const chunkDistance = lengthVec3(toChunk)
+  const chunkRadius = getPlanetChunkBoundingRadius(chunk)
+
+  if (chunkDistance <= chunkRadius + 0.000001) {
+    return true
+  }
+
+  const verticalHalfFovRadians =
+    Math.max(10, cameraVerticalFovDegrees) * (Math.PI / 180) * 0.5
+  const horizontalHalfFovRadians = Math.atan(
+    Math.tan(verticalHalfFovRadians) * cameraAspect
+  )
+  const viewHalfAngle = Math.max(
+    verticalHalfFovRadians,
+    horizontalHalfFovRadians
+  )
+  const chunkAngularRadius = Math.asin(
+    clamp(chunkRadius / chunkDistance, 0, 0.999)
+  )
+  const visibilityThreshold = Math.cos(
+    viewHalfAngle + chunkAngularRadius + 0.38
+  )
+
+  return (
+    dotVec3(normalizeVec3(toChunk), normalizeVec3(cameraForwardWorld)) >=
+    visibilityThreshold
+  )
+}
+
+function getPlanetChunkBoundingRadius(chunk: PlanetChunkDescriptor) {
+  const halfDiagonal = Math.hypot(chunk.size * 0.5, chunk.size * 0.5)
+
+  return halfDiagonal * 0.55 + PLANET_MAX_HEIGHT + 6
+}
+
 function getDistance(left: Vec3Like, right: Vec3Like) {
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z)
+}
+
+function lengthVec3(vector: Vec3Like) {
+  return Math.hypot(vector.x, vector.y, vector.z)
+}
+
+function normalizeVec3(vector: Vec3Like) {
+  const length = lengthVec3(vector)
+
+  return length <= 0.000001
+    ? { x: 0, y: 0, z: 0 }
+    : {
+        x: vector.x / length,
+        y: vector.y / length,
+        z: vector.z / length,
+      }
+}
+
+function subtractVec3(left: Vec3Like, right: Vec3Like) {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z,
+  }
+}
+
+function dotVec3(left: Vec3Like, right: Vec3Like) {
+  return left.x * right.x + left.y * right.y + left.z * right.z
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
 }
 
 function touchesEastEdge(

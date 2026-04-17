@@ -20,8 +20,13 @@ The important runtime pieces are.
 - Worker results use `SharedArrayBuffer` when the browser is cross origin isolated. That avoids the usual copy heavy return path.
 - Finished chunk results are queued and committed in small batches. That avoids React spikes when many workers finish close together.
 - The fly camera streams a little ahead of its current movement direction. That starts chunk work sooner when you move fast.
+- Fly mode keeps one streamed window around the current camera position and another around the predictive focus ahead. That makes sustained fast movement less likely to outrun the chunk handoff.
 - The quadtree only asks for high detail near the current camera focus.
+- Fine chunks behind the current fly camera view are filtered out before request and commit. That keeps the active triangle budget pointed at what the camera is actually looking at.
 - Older chunk generations stay alive briefly during handoff. That reduces visible holes and makes the stream transition smoother.
+- Chunks fully hidden by the planet horizon are filtered out too. That avoids spending terrain work on the far side of the sphere.
+- The fly underlay uses its own fallback material and stays out of the main depth fight. That reduces dark flashing during terrain handoff.
+- The chunk reveal helper starts from a small visible floor instead of pure zero. That avoids a single dark first frame when a new chunk lands.
 - Chunk buffers are built once and then wrapped into Three geometry. We do not rebuild the whole world every frame.
 - The material samples compressed KTX2 texture arrays. This keeps memory and upload cost under control.
 - Triplanar sampling avoids stretched UVs on steep terrain so we do not need bespoke unwrap work.

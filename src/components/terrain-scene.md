@@ -24,7 +24,12 @@ This component is the live bridge between the pure terrain systems and the runni
 - The snow accumulation state lives next to the chunk runtime state instead of React state. That keeps the compute loop off the rerender path.
 - New chunks reveal from a fog tinted state instead of appearing at full strength in one frame. That hides visible pop without using transparent terrain sorting.
 - Fly mode streams against a slightly lower overview underlay. That way a slow chunk handoff shows rough terrain instead of a flat shell.
+- The fly underlay uses its own non wireframe material and does not write depth. That makes it a fallback surface instead of something that fights the main streamed chunks.
 - Fly mode also pushes the streaming focus a bit ahead of the camera movement direction. That lets chunk requests start sooner when moving fast.
+- Fly mode now merges two streamed windows. one around the current camera position. and one around the predictive focus ahead. that keeps the current ground covered while the next terrain ring is already being requested.
+- Fly mode chunk selection now also looks at the current view direction. Fine chunks behind the camera are filtered out before they are even requested.
+- Chunk selection also applies horizon culling. Chunks fully hidden by the planet curve are not kept in the active streamed set.
+- New chunks also start from a small reveal floor instead of absolute zero. That avoids the first dark frame during chunk handoff.
 - The world render offset lives in a single group. That lets the fly camera move without forcing every terrain mesh prop to be recomputed through React on every frame.
 - The scene exports a compact debug state with fps. draw calls. chunk count. triangle count. queue pressure. LOD split. and SharedArrayBuffer usage so the UI can teach what the renderer is doing.
 

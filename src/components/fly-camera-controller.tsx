@@ -14,15 +14,19 @@ export interface FlyCameraControllerProps {
   focusRefreshDistance: number
   initialState?: FlyCameraState
   onCameraFocusWorldChange: (cameraFocusWorld: Vec3Like) => void
+  onCameraViewForwardChange: (cameraViewForward: Vec3Like) => void
   onWorldOriginSnapshotChange: (worldOrigin: Vec3Like) => void
   terrainSettings?: TerrainGenerationSettings
   worldOriginRef: MutableRefObject<Vec3Like>
 }
 
+const VIEW_DIRECTION_REFRESH_DOT = 0.992
+
 export function FlyCameraController({
   focusRefreshDistance,
   initialState,
   onCameraFocusWorldChange,
+  onCameraViewForwardChange,
   onWorldOriginSnapshotChange,
   terrainSettings,
   worldOriginRef,
@@ -34,6 +38,7 @@ export function FlyCameraController({
   const initialFlyStateRef = useRef<FlyCameraState>(spawnState)
   const flyStateRef = useRef<FlyCameraState>(spawnState)
   const focusWorldRef = useRef<Vec3Like>(spawnState.position)
+  const viewForwardRef = useRef<Vec3Like>(normalizeVec3(spawnState.forward))
   const keyStateRef = useRef({
     KeyA: false,
     KeyD: false,
@@ -52,13 +57,16 @@ export function FlyCameraController({
 
     flyStateRef.current = spawnState
     focusWorldRef.current = spawnStreamingFocus
+    viewForwardRef.current = normalizeVec3(spawnState.forward)
     worldOriginRef.current = spawnState.position
     onWorldOriginSnapshotChange(spawnState.position)
     onCameraFocusWorldChange(spawnStreamingFocus)
+    onCameraViewForwardChange(viewForwardRef.current)
     syncCameraFromFlyState(camera, spawnState)
   }, [
     camera,
     onCameraFocusWorldChange,
+    onCameraViewForwardChange,
     onWorldOriginSnapshotChange,
     worldOriginRef,
   ])
@@ -155,13 +163,24 @@ export function FlyCameraController({
     syncCameraFromFlyState(camera, flyStateRef.current)
 
     const nextStreamingFocus = getStreamingFocusWorld(flyStateRef.current)
+    const nextViewForward = normalizeVec3(flyStateRef.current.forward)
+    const isRotatedEnough =
+      getDirectionDot(nextViewForward, viewForwardRef.current) <=
+      VIEW_DIRECTION_REFRESH_DOT
+
+    if (isRotatedEnough) {
+      viewForwardRef.current = nextViewForward
+      onCameraViewForwardChange(nextViewForward)
+    }
 
     if (
       getDistance(nextStreamingFocus, focusWorldRef.current) >=
       focusRefreshDistance
     ) {
       focusWorldRef.current = nextStreamingFocus
+      viewForwardRef.current = nextViewForward
       onCameraFocusWorldChange(nextStreamingFocus)
+      onCameraViewForwardChange(nextViewForward)
       onWorldOriginSnapshotChange(flyStateRef.current.position)
     }
   })
@@ -220,6 +239,10 @@ function normalizeVec3(vector: Vec3Like) {
 
 function getDistance(left: Vec3Like, right: Vec3Like) {
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z)
+}
+
+function getDirectionDot(left: Vec3Like, right: Vec3Like) {
+  return left.x * right.x + left.y * right.y + left.z * right.z
 }
 
 function getStreamingFocusWorld(flyState: FlyCameraState) {

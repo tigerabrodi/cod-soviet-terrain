@@ -28,8 +28,10 @@ import {
 } from '@/lib/terrain/terrain-material'
 import {
   PLANET_RADIUS,
+  filterVisiblePlanetChunks,
   getPlanetChunkEdgeMorphs,
   selectPlanetChunkWindow,
+  type PlanetChunkDescriptor,
   type Vec3Like,
 } from '@/lib/terrain/terrain-planet'
 import {
@@ -164,6 +166,7 @@ function TerrainWorld({
   const camera = useThree((state) => state.camera)
   const gl = useThree((state) => state.gl)
   const getThreeState = useThree((state) => state.get)
+  const viewportSize = useThree((state) => state.size)
 
   const [terrainTextures, setTerrainTextures] =
     useState<TerrainTextureSet | null>(null)
@@ -184,6 +187,9 @@ function TerrainWorld({
   const [cameraFocusWorld, setCameraFocusWorld] = useState<Vec3Like>(
     () => getModeSetup(cameraMode).cameraFocusWorld
   )
+  const [cameraViewForward, setCameraViewForward] = useState<Vec3Like>(() =>
+    normalizeVec3(getModeSetup(cameraMode).localLookAt)
+  )
   const isPlanetOverviewVisible = cameraMode === 'orbit'
 
   const previousCameraModeRef = useRef<CameraMode | null>(null)
@@ -195,6 +201,10 @@ function TerrainWorld({
   const snowSimulationCursorRef = useRef(0)
   const snowSimulationTimeRef = useRef(0)
   const worldOriginRef = useRef<Vec3Like>(getModeSetup(cameraMode).worldOrigin)
+
+  const cameraAspect = viewportSize.width / Math.max(1, viewportSize.height)
+  const cameraVerticalFovDegrees =
+    'fov' in camera && typeof camera.fov === 'number' ? camera.fov : 38
 
   const snowAccumulationSettings = useMemo<SnowAccumulationSettings>(
     () => ({
@@ -233,6 +243,28 @@ function TerrainWorld({
       terrainTextures,
     ]
   )
+  const flyUnderlayMaterial = useMemo(() => {
+    if (!terrainTextures) {
+      return null
+    }
+
+    const underlayMaterial = createTerrainMaterial(terrainTextures, {
+      ...(debugSettings.terrainMaterial as TerrainMaterialSettings),
+      snowAccumulationStrength: snowAccumulationSettings.visualStrength,
+      wireframe: false,
+    })
+
+    underlayMaterial.depthWrite = false
+    underlayMaterial.polygonOffset = true
+    underlayMaterial.polygonOffsetFactor = 4
+    underlayMaterial.polygonOffsetUnits = 4
+
+    return underlayMaterial
+  }, [
+    debugSettings.terrainMaterial,
+    snowAccumulationSettings.visualStrength,
+    terrainTextures,
+  ])
   const planetOverviewGeometry = useMemo(
     () => createPlanetOverviewGeometry(debugSettings.terrainGeneration),
     [debugSettings.terrainGeneration]
@@ -240,23 +272,49 @@ function TerrainWorld({
   const planetFlyUnderlayGeometry = useMemo(
     () =>
       createPlanetOverviewGeometry(debugSettings.terrainGeneration, {
-        heightBias: -4,
+        heightBias: -5,
         heightSegments: 56,
-        snowCoverageScale: 0.34,
+        snowCoverageScale: 0.52,
         widthSegments: 96,
       }),
     [debugSettings.terrainGeneration]
   )
-  const desiredChunkDescriptors = useMemo(
-    () =>
-      cameraMode === 'orbit'
-        ? []
-        : selectPlanetChunkWindow(
-            cameraFocusWorld,
-            PLANET_LOD_RESOLUTIONS,
-            PLANET_RADIUS
-          ),
-    [cameraFocusWorld, cameraMode]
+  const desiredChunkDescriptors = useMemo<Array<PlanetChunkDescriptor>>(
+    () => {
+      if (cameraMode === 'orbit') {
+        return []
+      }
+
+      const currentWindow: Array<PlanetChunkDescriptor> = selectPlanetChunkWindow(
+        worldOriginSnapshot,
+        PLANET_LOD_RESOLUTIONS,
+        PLANET_RADIUS
+      )
+      const predictiveWindow: Array<PlanetChunkDescriptor> = selectPlanetChunkWindow(
+        cameraFocusWorld,
+        PLANET_LOD_RESOLUTIONS,
+        PLANET_RADIUS
+      )
+
+      return filterVisiblePlanetChunks(
+        mergeChunkDescriptors(currentWindow, predictiveWindow),
+        {
+          cameraAspect,
+          cameraForwardWorld: cameraViewForward,
+          cameraVerticalFovDegrees,
+          cameraWorldPosition: worldOriginSnapshot,
+          planetRadius: PLANET_RADIUS,
+        }
+      )
+    },
+    [
+      cameraAspect,
+      cameraFocusWorld,
+      cameraMode,
+      cameraVerticalFovDegrees,
+      cameraViewForward,
+      worldOriginSnapshot,
+    ]
   )
   const desiredEdgeMorphs = useMemo(
     () => getPlanetChunkEdgeMorphs(desiredChunkDescriptors),
@@ -307,6 +365,7 @@ function TerrainWorld({
     const resetId = window.requestAnimationFrame(() => {
       setWorldOriginSnapshot(setup.worldOrigin)
       setCameraFocusWorld(setup.cameraFocusWorld)
+      setCameraViewForward(normalizeVec3(setup.localLookAt))
       applyCameraSetup(camera, setup)
     })
 
@@ -349,6 +408,12 @@ function TerrainWorld({
       terrainMaterial?.dispose()
     }
   }, [terrainMaterial])
+
+  useEffect(() => {
+    return () => {
+      flyUnderlayMaterial?.dispose()
+    }
+  }, [flyUnderlayMaterial])
 
   useEffect(() => {
     let isMounted = true
@@ -604,8 +669,8 @@ function TerrainWorld({
         />
         <mesh
           geometry={planetFlyUnderlayGeometry}
-          material={terrainMaterial ?? undefined}
-          receiveShadow
+          material={flyUnderlayMaterial ?? terrainMaterial ?? undefined}
+          renderOrder={-1}
           visible={!isPlanetOverviewVisible}
         />
         {isPlanetOverviewVisible
@@ -632,6 +697,7 @@ function TerrainWorld({
         <FlyCameraController
           focusRefreshDistance={FLY_FOCUS_REFRESH_DISTANCE}
           onCameraFocusWorldChange={setCameraFocusWorld}
+          onCameraViewForwardChange={setCameraViewForward}
           onWorldOriginSnapshotChange={setWorldOriginSnapshot}
           terrainSettings={debugSettings.terrainGeneration}
           worldOriginRef={worldOriginRef}
@@ -690,13 +756,16 @@ function TerrainChunkMesh({
       return
     }
 
-    ;(revealAttribute.array as Float32Array).fill(0)
+    const initialRevealFactor = getTerrainChunkRevealFactor(0)
+
+    ;(revealAttribute.array as Float32Array).fill(initialRevealFactor)
     revealAttribute.needsUpdate = true
-    lastRevealRef.current = 0
+    lastRevealRef.current = initialRevealFactor
   }, [terrainChunk.geometry, terrainChunk.revealStartedAtSeconds])
 
   return (
     <mesh
+      renderOrder={1}
       geometry={terrainChunk.geometry}
       material={terrainMaterial ?? undefined}
       position={terrainChunk.buildOrigin}
@@ -742,4 +811,58 @@ function readRendererStats(renderer: unknown) {
     geometries: info?.memory?.geometries ?? 0,
     textureCount: info?.memory?.textures ?? 0,
   }
+}
+
+function mergeChunkDescriptors(
+  left: ReadonlyArray<PlanetChunkDescriptor>,
+  right: ReadonlyArray<PlanetChunkDescriptor>
+) {
+  const merged = new Map<string, PlanetChunkDescriptor>()
+
+  for (const terrainChunk of left) {
+    merged.set(terrainChunk.key, terrainChunk)
+  }
+
+  for (const terrainChunk of right) {
+    merged.set(terrainChunk.key, terrainChunk)
+  }
+
+  return Array.from(merged.values())
+}
+
+function normalizeVec3(vector: readonly [number, number, number] | Vec3Like) {
+  if (isVec3Tuple(vector)) {
+    return normalizeVec3Tuple(vector)
+  }
+
+  return normalizeVec3Object(vector)
+}
+
+function normalizeVec3Tuple(vector: readonly [number, number, number]) {
+  const x = vector[0]
+  const y = vector[1]
+  const z = vector[2]
+  const length = Math.hypot(x, y, z) || 1
+
+  return {
+    x: x / length,
+    y: y / length,
+    z: z / length,
+  }
+}
+
+function normalizeVec3Object(vector: Vec3Like) {
+  const length = Math.hypot(vector.x, vector.y, vector.z) || 1
+
+  return {
+    x: vector.x / length,
+    y: vector.y / length,
+    z: vector.z / length,
+  }
+}
+
+function isVec3Tuple(
+  vector: readonly [number, number, number] | Vec3Like
+): vector is readonly [number, number, number] {
+  return Array.isArray(vector)
 }
